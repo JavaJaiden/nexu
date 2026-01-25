@@ -1,0 +1,31 @@
+{
+  "name": "narbhacks",
+  "private": true,
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "clean": "git clean -xdf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\" --ignore-path .gitignore",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format:biome": "biome format --write .",
+    "check": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.1.1",
+    "prettier": "^3.2.5",
+    "turbo": "^2.0.12"
+  },
+  "engines": {
+    "node": ">=18.8.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "pnpm@9.15.1",
+  "dependencies": {
+    "react": "~19.1.0",
+    "react-dom": "~19.1.0"
+  }
+}

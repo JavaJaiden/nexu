@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "narbhacks",
+    "slug": "narbhacks",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/narb_light_ascii.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/narb_light_ascii.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#e1e1e1"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app uses location to show your current position.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses location to show your current position."
+      },
+      "bundleIdentifier": "com.anonymous.narbhacks"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/narb_light_ascii.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/narb_light_ascii.png"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow narbhacks to use your location to show your current position.",
+          "locationAlwaysPermission": "Allow narbhacks to use your location to show your current position.",
+          "locationWhenInUsePermission": "Allow narbhacks to use your location to show your current position."
+        }
+      ],
+      "expo-asset",
+      "expo-web-browser"
+    ]
+  }
+}

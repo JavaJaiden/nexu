@@ -1,0 +1,21 @@
+{
+  "name": "@packages/backend",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "convex dev",
+    "setup": "convex dev --until-success"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "convex": "^1.25.0",
+    "convex-helpers": "^0.1.100",
+    "openai": "^4.45.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,40 @@
+---
+description: Guidelines for using Biome linter and formatter to maintain consistent code quality and formatting
+globs: **/*.ts,**/*.tsx,**/*.js,**/*.jsx,**/*.json
+---
+
+# Biome code quality guidelines
+
+## Biome linter and formatter usage
+- ALWAYS use Biome linter and formatter when possible to maintain consistent code quality and formatting across the project.
+- Run Biome formatter before committing code to ensure consistent style.
+- Address all Biome linter warnings and errors to maintain clean, readable code.
+- Use Biome's configuration file (`biome.json`) to customize rules according to project standards.
+- Integrate Biome into your development workflow for automatic formatting and linting.
+
+## Available commands
+- Use `pnpm run lint` to check for linting and formatting issues
+- Use `pnpm run lint:fix` to fix linting and formatting issues automatically
+- Use `pnpm run format:biome` to format code only (without linting)
+- Use `pnpm run check` to check all issues (alias for lint)
+
+## Configuration best practices
+- Keep the `biome.json` configuration file up to date with project requirements
+- Configure appropriate rules for TypeScript, JavaScript, and JSON files
+- Set up consistent formatting rules for indentation, semicolons, quotes, and line endings
+- Configure linting rules to catch common errors and enforce coding standards
+- Use ignore patterns to exclude generated files and third-party code
+
+## Development workflow integration
+- Set up your editor to run Biome formatting on save
+- Include Biome checks in pre-commit hooks to prevent poorly formatted code from being committed
+- Add Biome linting to CI/CD pipelines to ensure code quality standards are maintained
+- Consider using Biome's VS Code extension for real-time feedback during development
+
+## Project configuration
+This project includes:
+- TypeScript and React-specific rules
+- Accessibility checks
+- Security best practices
+- Import/export organization
+- Consistent formatting with 2-space indentation
