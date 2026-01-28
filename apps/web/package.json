@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^1.1.6",
+    "@ai-sdk/react": "^1.0.6",
     "@clerk/clerk-react": "^5.32.1",
     "@clerk/nextjs": "^6.36.10",
     "@headlessui/react": "^2.0.3",
@@ -21,14 +23,17 @@
     "@tamagui/core": "^1.144.3",
     "@tamagui/font-inter": "^1.141.5",
     "@tamagui/next-plugin": "^1.144.3",
+    "ai": "^4.2.0",
     "class-variance-authority": "^0.7.0",
     "convex": "^1.13.0",
     "lucide-react": "^0.563.0",
     "next": "^16.0.0",
+    "pdf-parse": "^1.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^2.3.0",
-    "tamagui": "^1.141.5"
+    "tamagui": "^1.141.5",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",

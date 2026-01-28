@@ -96,6 +96,35 @@ const lightTheme = {
   error: customTokens.color.error,
 };
 
+const darkTheme = {
+  background: "#0b0c0f",
+  backgroundHover: "#14161b",
+  backgroundPress: "#14161b",
+  backgroundFocus: "#14161b",
+  backgroundTransparent: "transparent",
+
+  color: "#f5f5f5",
+  colorHover: "#ffffff",
+  colorPress: "#d4d4d8",
+  colorFocus: "#ffffff",
+
+  borderColor: "#2a2f38",
+  borderColorHover: "#3a404c",
+  borderColorFocus: "#4b5563",
+
+  placeholderColor: "#71717a",
+
+  accent: "#ffffff",
+  accentMuted: "#a1a1aa",
+  textMuted: "#a1a1aa",
+  textSubtle: "#71717a",
+  border: "#2a2f38",
+  borderStrong: "#3a404c",
+  backgroundSecondary: "#14161b",
+  success: customTokens.color.success,
+  error: customTokens.color.error,
+};
+
 const config = createTamagui({
   defaultTheme: "light",
   shouldAddPrefersColorThemes: false,
@@ -108,6 +137,7 @@ const config = createTamagui({
   themes: {
     ...themes,
     light: lightTheme,
+    dark: darkTheme,
   },
   tokens: customTokens,
   animations,

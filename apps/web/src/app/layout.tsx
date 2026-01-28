@@ -7,8 +7,8 @@ import { TamaguiProvider } from "./TamaguiProvider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Notes App",
-  description: "A simple notes app with AI summaries.",
+  title: "Nexus",
+  description: "Auto-routed homework help with transparent model selection.",
 };
 
 export default function RootLayout({

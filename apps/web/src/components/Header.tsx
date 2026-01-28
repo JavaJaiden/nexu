@@ -4,11 +4,18 @@ import { useUser, SignOutButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button, Text, XStack, YStack, Avatar } from "tamagui";
-import { LogOut } from "lucide-react";
+import { LogOut, Moon, Sun } from "lucide-react";
+import { useThemeSetting } from "@/lib/themeContext";
 
 export default function Header() {
   const { user } = useUser();
   const pathname = usePathname();
+  const { theme, setTheme } = useThemeSetting();
+  const navItems = [
+    { label: "Studio", href: "/studio" },
+    { label: "Model Hub", href: "/models" },
+    { label: "Laboratory", href: "/lab" },
+  ];
 
   return (
     <XStack
@@ -22,15 +29,32 @@ export default function Header() {
     >
       <Link href="/" style={{ textDecoration: "none" }}>
         <Text fontSize={20} fontWeight="600" color="$color">
-          Notes
+          Nexus
         </Text>
       </Link>
 
       <XStack alignItems="center" gap="$md">
+        <XStack alignItems="center" gap="$md" display="flex" flexWrap="wrap">
+          {navItems.map((item) => {
+            const isActive = pathname === item.href;
+            return (
+              <Link key={item.href} href={item.href}>
+                <Text
+                  fontSize={14}
+                  fontWeight={isActive ? "600" : "400"}
+                  color={isActive ? "$color" : "$textMuted"}
+                >
+                  {item.label}
+                </Text>
+              </Link>
+            );
+          })}
+        </XStack>
+
         {user ? (
           <>
-            {pathname !== "/notes" && (
-              <Link href="/notes">
+            {pathname !== "/studio" && (
+              <Link href="/studio">
                 <Button
                   size="$3"
                   backgroundColor="$color"
@@ -38,10 +62,20 @@ export default function Header() {
                   borderRadius="$sm"
                   pressStyle={{ opacity: 0.8 }}
                 >
-                  My Notes
+                  Studio
                 </Button>
               </Link>
             )}
+            <Button
+              size="$3"
+              backgroundColor="transparent"
+              borderWidth={1}
+              borderColor="$border"
+              borderRadius="$sm"
+              onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
+            </Button>
             <XStack alignItems="center" gap="$sm">
               {user.imageUrl ? (
                 <Avatar circular size="$3">
@@ -76,7 +110,17 @@ export default function Header() {
           </>
         ) : (
           <XStack gap="$sm">
-            <Link href="/notes">
+            <Button
+              size="$3"
+              backgroundColor="transparent"
+              borderWidth={1}
+              borderColor="$border"
+              borderRadius="$sm"
+              onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
+            </Button>
+            <Link href="/studio">
               <Button
                 size="$3"
                 backgroundColor="transparent"
@@ -89,7 +133,7 @@ export default function Header() {
                 Sign in
               </Button>
             </Link>
-            <Link href="/notes">
+            <Link href="/studio">
               <Button
                 size="$3"
                 backgroundColor="$color"
