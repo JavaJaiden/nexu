@@ -50,6 +50,7 @@ export default function Composer({
   onSend,
   onStop,
   isBusy,
+  isReadOnly = false,
   attachments,
   onRemoveAttachment,
   onFilesSelected,
@@ -70,13 +71,17 @@ export default function Composer({
     el.style.height = `${clampedHeight}px`;
   }, [value]);
 
+  const isDisabled = isBusy || isReadOnly;
+
   // Focus on mount
   useEffect(() => {
+    if (isReadOnly) return;
     textareaRef.current?.focus();
-  }, []);
+  }, [isReadOnly]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isReadOnly) return;
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (!isBusy && value.trim()) {
@@ -84,15 +89,16 @@ export default function Composer({
         }
       }
     },
-    [isBusy, value, onSend]
+    [isBusy, isReadOnly, value, onSend]
   );
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (isReadOnly) return;
       onFilesSelected(e.target.files);
       e.currentTarget.value = "";
     },
-    [onFilesSelected]
+    [isReadOnly, onFilesSelected]
   );
 
   return (
@@ -134,7 +140,7 @@ export default function Composer({
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
             placeholder={placeholder}
-            disabled={isBusy}
+            disabled={isDisabled}
             style={{
               width: "100%",
               minHeight: MIN_HEIGHT,
@@ -143,7 +149,8 @@ export default function Composer({
               fontSize: 15,
               lineHeight: 1.5,
               fontFamily: "inherit",
-              color: "var(--colorColor)",
+              color: "var(--color)",
+              caretColor: "var(--color)",
               backgroundColor: "transparent",
               border: "none",
               borderRadius: 8,
@@ -161,7 +168,7 @@ export default function Composer({
             borderWidth={0}
             color="$textMuted"
             onPress={() => fileInputRef.current?.click()}
-            disabled={isBusy}
+            disabled={isDisabled}
             hoverStyle={{ backgroundColor: "$backgroundSecondary" }}
             pressStyle={{ scale: 0.95 }}
             icon={<Paperclip size={18} />}
@@ -186,8 +193,8 @@ export default function Composer({
               color="$background"
               borderRadius="$md"
               onPress={onSend}
-              disabled={!value.trim()}
-              opacity={value.trim() ? 1 : 0.5}
+              disabled={isReadOnly || !value.trim()}
+              opacity={!isReadOnly && value.trim() ? 1 : 0.5}
               pressStyle={{ scale: 0.98 }}
               icon={<Send size={18} />}
             >

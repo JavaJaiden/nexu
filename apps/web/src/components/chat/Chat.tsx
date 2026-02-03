@@ -7,9 +7,7 @@ import {
   useEffect,
   useMemo,
 } from "react";
-import { YStack, XStack, Button, Text } from "tamagui";
-import { useChat as useAIChat } from "ai/react";
-import type { Message } from "ai";
+import { Button, Text, XStack, YStack } from "tamagui";
 import Composer from "./Composer";
 import Timeline from "./Timeline";
 import CompareOverlay from "./CompareOverlay";
@@ -40,11 +38,12 @@ interface ChatContainerProps {
   collapseAll: boolean;
   modelMetaMap: Map<string, any>;
   modelNameMap: Map<string, string>;
-  initialMessages?: Message[];
   initialTimeline?: ChatEntry[];
   toolOverrides?: Record<string, any>;
   toolOverridesByIndex?: Array<any>;
   onSaveTranscript?: (payload: SaveTranscriptPayload) => void;
+  readOnly?: boolean;
+  onRequestNewChat?: () => void;
 }
 
 export default function Chat({
@@ -59,11 +58,12 @@ export default function Chat({
   collapseAll,
   modelMetaMap,
   modelNameMap,
-  initialMessages,
   initialTimeline,
   toolOverrides,
   toolOverridesByIndex,
   onSaveTranscript,
+  readOnly = false,
+  onRequestNewChat,
 }: ChatContainerProps) {
   const [input, setInput] = useState("");
   const [timeline, setTimeline] = useState<ChatEntry[]>(initialTimeline ?? []);
@@ -73,131 +73,136 @@ export default function Chat({
 
   const runControllersRef = useRef<Map<string, Map<string, AbortController>>>(new Map());
   const runsRef = useRef<MultiModelRun[]>([]);
+  const hasReconstructedRef = useRef(false);
 
   // Keep runs ref in sync
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
 
-  // AI Chat hook for single-model mode
-  const { messages, append, status, stop } = useAIChat({
-    api: "/api/studio",
-    body: {
-      mode,
-      attachments,
-    },
-    id: chatId,
-    initialMessages,
-  });
-
-  const isLoading = status === "streaming" || status === "submitted";
   const hasRunningRun = runs.some((r) => r.status === "running");
-  const isBusy = isLoading || hasRunningRun;
-
-  // Sync AI messages to timeline
-  useEffect(() => {
-    if (messages.length === 0) return;
-
-    setTimeline((prev) => {
-      const next = [...prev];
-      messages.forEach((message) => {
-        const existingIndex = next.findIndex(
-          (e) => e.kind === "message" && e.message.id === message.id
-        );
-        if (existingIndex >= 0) {
-          next[existingIndex] = { kind: "message", message };
-        } else {
-          next.push({ kind: "message", message });
-        }
-      });
-      return next;
-    });
-  }, [messages]);
+  const isBusy = hasRunningRun;
 
   // Initialize timeline and reconstruct runs from props (for loading history)
   useEffect(() => {
-    if (initialTimeline?.length && timeline.length === 0) {
-      setTimeline(initialTimeline);
-      
-      // Reconstruct runs from transcript history
+    if (initialTimeline?.length && !hasReconstructedRef.current) {
+      hasReconstructedRef.current = true;
+      // Reconstruct runs from transcript history and normalize timeline
       const reconstructedRuns: MultiModelRun[] = [];
-      let runIndex = 0;
-      
+      const normalizedTimeline: ChatEntry[] = [];
+      let messageIndex = -1;
+      let lastUserQuestion = "";
+
       initialTimeline.forEach((entry) => {
-        if (entry.kind === "message" && entry.message.role === "assistant") {
-          const msg = entry.message as ChatMessage;
-          const tools = toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[runIndex];
-          runIndex++;
-          
-          if (tools?.solveQuestions && tools.solveQuestions.length > 0) {
-            const aggregateSolve = tools.solveQuestions.find((s: SolveOutput) => s.kind === "aggregate");
-            const baseSolves = tools.solveQuestions.filter((s: SolveOutput) => s.kind !== "aggregate");
-            
-            if (baseSolves.length > 0 || aggregateSolve) {
-              const runId = msg.runId ?? `history-${msg.id}`;
-              const modelIds = baseSolves.map((s: SolveOutput) => s.model ?? "unknown").filter(Boolean);
-              
-              // Build results by model
-              const resultsByModel: Record<string, ModelResult> = {};
-              baseSolves.forEach((solve: SolveOutput) => {
-                const modelId = solve.model ?? "unknown";
-                resultsByModel[modelId] = {
-                  modelId,
-                  status: "complete",
-                  text: solve.final,
-                  latencyMs: solve.durationMs,
-                };
-              });
-              
-              const run: MultiModelRun = {
-                id: runId,
-                runId,
-                queryText: msg.content ?? "",
-                status: "complete",
-                selectedModels: modelIds.length > 0 ? modelIds : ["unknown"],
-                resultsByModel,
-                aggregated: aggregateSolve ? {
-                  text: aggregateSolve.final,
-                  confidence: aggregateSolve.confidence,
-                } : undefined,
-                executionPlan: {
-                  runId,
-                  question: msg.content ?? "",
-                  modelIds: modelIds.length > 0 ? modelIds : ["unknown"],
-                  createdAt: Date.now(),
-                  mode: "fast",
-                  attachments: [],
-                },
-                timings: { 
-                  startAt: Date.now() - (aggregateSolve?.durationMs ?? 0), 
-                  endAt: Date.now() 
-                },
-                counts: { 
-                  total: modelIds.length || 1, 
-                  complete: modelIds.length || 1, 
-                  failed: 0, 
-                  cancelled: 0 
-                },
-                showIndividual: false,
-                collapsed: false,
-              };
-              
-              reconstructedRuns.push(run);
-            }
-          }
+        if (entry.kind !== "message") {
+          normalizedTimeline.push(entry);
+          return;
         }
+
+        messageIndex += 1;
+        const msg = entry.message as ChatMessage;
+
+        if (msg.role === "user") {
+          lastUserQuestion = msg.content ?? "";
+          normalizedTimeline.push(entry);
+          return;
+        }
+
+        const tools = toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[messageIndex];
+        const solveQuestions = tools?.solveQuestions ?? [];
+        const aggregateSolve = solveQuestions.find((s: SolveOutput) => s.kind === "aggregate");
+        const baseSolves = solveQuestions.filter((s: SolveOutput) => s.kind !== "aggregate");
+        const shouldRenderRun = baseSolves.length > 1 || Boolean(aggregateSolve);
+
+        if (!shouldRenderRun) {
+          normalizedTimeline.push(entry);
+          return;
+        }
+
+        const runId = msg.runId ?? `history-${msg.id}`;
+        const modelIds = Array.from(
+          new Set(baseSolves.map((s: SolveOutput) => s.model ?? "unknown").filter(Boolean))
+        );
+
+        const resultsByModel: Record<string, ModelResult> = {};
+        baseSolves.forEach((solve: SolveOutput) => {
+          const modelId = solve.model ?? "unknown";
+          resultsByModel[modelId] = {
+            modelId,
+            status: "complete",
+            text: solve.final,
+            latencyMs: solve.durationMs,
+            steps: solve.steps,
+            confidence: solve.confidence,
+            citations: solve.citations,
+            selectionReason: solve.selectionReason,
+            gatewayNote: solve.gatewayNote,
+            usedModel: solve.model,
+          };
+        });
+
+        const selectedModels = modelIds.length > 0 ? modelIds : [];
+        const durationHint =
+          aggregateSolve?.durationMs ?? baseSolves[0]?.durationMs ?? 0;
+        const run: MultiModelRun = {
+          id: runId,
+          runId,
+          queryText: lastUserQuestion || msg.content || "",
+          status: "complete",
+          selectedModels,
+          resultsByModel,
+          aggregated: aggregateSolve
+            ? {
+                text: aggregateSolve.final,
+                confidence: aggregateSolve.confidence,
+              }
+            : undefined,
+          executionPlan: {
+            runId,
+            question: lastUserQuestion || msg.content || "",
+            modelIds: selectedModels,
+            aggregatorId: aggregateSolve?.model,
+            createdAt: Date.now(),
+            mode: "fast",
+            attachments: [],
+          },
+          timings: {
+            startAt: Date.now() - durationHint,
+            endAt: Date.now(),
+          },
+          counts: {
+            total: selectedModels.length,
+            complete: selectedModels.length,
+            failed: 0,
+            cancelled: 0,
+          },
+          showIndividual: false,
+          collapsed: false,
+        };
+
+        reconstructedRuns.push(run);
+        normalizedTimeline.push({ kind: "run", runId });
       });
-      
+
+      setTimeline(normalizedTimeline);
+
       if (reconstructedRuns.length > 0) {
         setRuns(reconstructedRuns);
       }
     }
-  }, [initialTimeline, timeline.length, toolOverrides, toolOverridesByIndex]);
+  }, [initialTimeline, toolOverrides, toolOverridesByIndex]);
 
   const effectiveModels = useMemo(() => {
     const unique = Array.from(new Set(preferredModels.filter(Boolean)));
     if (unique.length >= 2) return unique;
-    if (unique.length === 1) return [...unique, ...DEFAULT_MULTI_MODELS.slice(0, 2)];
+    if (unique.length === 1) {
+      const filled = [...unique];
+      for (const id of DEFAULT_MULTI_MODELS) {
+        if (filled.length >= 3) break;
+        if (!filled.includes(id)) filled.push(id);
+      }
+      return filled;
+    }
     return DEFAULT_MULTI_MODELS;
   }, [preferredModels]);
 
@@ -275,6 +280,7 @@ export default function Chat({
             modelId,
             messages: [{ role: "user", content: question }],
             mode,
+            stepsMode: showSteps ? "detailed" : "brief",
             signal: controller.signal,
             attachments,
           });
@@ -289,6 +295,12 @@ export default function Chat({
                 tokensIn: result.tokensIn,
                 tokensOut: result.tokensOut,
                 text: result.text,
+                steps: result.steps,
+                confidence: result.confidence,
+                citations: result.citations,
+                selectionReason: result.selectionReason,
+                gatewayNote: result.gatewayNote,
+                usedModel: result.usedModel,
               },
             };
             const counts = Object.values(nextResults).reduce(
@@ -360,17 +372,17 @@ export default function Chat({
         runControllersRef.current.delete(runId);
       });
     },
-    [effectiveModels, aggregatorModel, mode, attachments, updateRun, onAttachmentsChange]
+    [effectiveModels, aggregatorModel, mode, attachments, showSteps, updateRun, onAttachmentsChange]
   );
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
-    if (!trimmed || isBusy) return;
+    if (!trimmed || isBusy || readOnly) return;
 
     // Always use multi-model mode
     const clientMessageId = crypto.randomUUID();
     startMultiModelRun(trimmed, clientMessageId);
-  }, [input, isBusy, startMultiModelRun]);
+  }, [input, isBusy, readOnly, startMultiModelRun]);
 
   const handleStop = useCallback(() => {
     // Cancel any running runs
@@ -387,8 +399,7 @@ export default function Chat({
         }));
       }
     });
-    stop();
-  }, [runs, stop, updateRun]);
+  }, [runs, updateRun]);
 
   const handleFileSelect = useCallback(
     async (files: FileList | null) => {
@@ -431,14 +442,6 @@ export default function Chat({
     [runs]
   );
 
-  const handleExpandModel = useCallback(
-    (runId: string, modelId: string) => {
-      setCompareRunId(runId);
-      setCompareSelected([modelId]);
-    },
-    []
-  );
-
   const compareRun = compareRunId ? runs.find((r) => r.id === compareRunId) ?? null : null;
 
   const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
@@ -468,6 +471,23 @@ export default function Chat({
         const run = runsById.get(entry.runId);
         if (!run?.aggregated?.text) return;
         const aggregatorId = run.executionPlan.aggregatorId;
+        const baseSolves: SolveOutput[] = run.selectedModels
+          .map((modelId) => {
+            const result = run.resultsByModel[modelId];
+            if (!result || result.status !== "complete" || !result.text) return null;
+            return {
+              steps: result.steps ?? [],
+              final: result.text,
+              model: result.usedModel ?? modelId,
+              confidence: result.confidence,
+              citations: result.citations ?? [],
+              durationMs: result.latencyMs,
+              selectionReason: result.selectionReason,
+              gatewayNote: result.gatewayNote,
+              kind: "solve",
+            } as SolveOutput;
+          })
+          .filter((solve): solve is SolveOutput => Boolean(solve));
         const aggregateSolve: SolveOutput = {
           steps: [],
           final: run.aggregated.text,
@@ -488,7 +508,7 @@ export default function Chat({
         items.push({
           role: "assistant",
           content: run.aggregated.text,
-          tools: { solveQuestions: [aggregateSolve] },
+          tools: { solveQuestions: [...baseSolves, aggregateSolve] },
         });
       }
     });
@@ -506,7 +526,7 @@ export default function Chat({
       const entry = runEntries[i];
       if (entry.kind !== "run") continue;
       const run = runsById.get(entry.runId);
-      if (run?.selectedModels?.length) return run.selectedModels;
+      if (run?.selectedModels?.length) return Array.from(new Set(run.selectedModels));
     }
     return effectiveModels;
   }, [runEntries, runsById, effectiveModels]);
@@ -543,9 +563,35 @@ export default function Chat({
           onCompareRun={handleCompareRun}
           onToggleRunIndividual={handleToggleRunIndividual}
           onCopyModel={handleCopyModel}
-          onExpandModel={handleExpandModel}
         />
       </YStack>
+
+      {readOnly && (
+        <XStack
+          alignItems="center"
+          justifyContent="space-between"
+          padding="$md"
+          borderRadius="$md"
+          borderWidth={1}
+          borderColor="$border"
+          backgroundColor="$backgroundSecondary"
+        >
+          <Text fontSize={13} color="$textMuted">
+            Viewing history. Start a new chat to ask another question.
+          </Text>
+          {onRequestNewChat && (
+            <Button
+              size="$2"
+              backgroundColor="$color"
+              color="$background"
+              borderRadius="$md"
+              onPress={onRequestNewChat}
+            >
+              New Chat
+            </Button>
+          )}
+        </XStack>
+      )}
 
       {/* Composer */}
       <Composer
@@ -554,11 +600,15 @@ export default function Chat({
         onSend={handleSend}
         onStop={handleStop}
         isBusy={isBusy}
+        isReadOnly={readOnly}
         attachments={attachments}
         onRemoveAttachment={(index) =>
           onAttachmentsChange(attachments.filter((_, i) => i !== index))
         }
         onFilesSelected={handleFileSelect}
+        placeholder={
+          readOnly ? "Viewing history. Click New Chat to ask a question." : undefined
+        }
       />
 
       {/* Compare Overlay */}

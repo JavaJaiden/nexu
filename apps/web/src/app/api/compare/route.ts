@@ -50,12 +50,13 @@ export async function POST(req: Request) {
     return new Response("Missing OPENAI_API_KEY", { status: 500 });
   }
 
-  const { question, models, mode, maxSameModel, attachments } = (await req.json()) as {
+  const { question, models, mode, maxSameModel, attachments, stepsMode } = (await req.json()) as {
     question: string;
     models: string[];
     mode?: "fast" | "deep";
     maxSameModel?: number;
     attachments?: Array<{ name: string; type: string; data: string }>;
+    stepsMode?: "brief" | "detailed";
   };
 
   if (!question || !Array.isArray(models) || models.length === 0) {
@@ -77,6 +78,9 @@ export async function POST(req: Request) {
 
   const subject = detectSubject(question);
   const selectedMode = mode ?? "fast";
+  const normalizedStepsMode = stepsMode === "detailed" ? "detailed" : "brief";
+  const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
+  const maxSteps = normalizedStepsMode === "detailed" ? 8 : 5;
   const maxSame = typeof maxSameModel === "number" && maxSameModel > 0 ? maxSameModel : 5;
   const usageCounts: Record<string, number> = {};
   const externalContext = await buildExternalContext(question, attachments ?? []);
@@ -118,14 +122,17 @@ export async function POST(req: Request) {
         const result = await generateObject({
           model: gateway.model,
           schema: z.object({
-            steps: z.array(z.string()).min(2).max(6),
+            steps: z.array(z.string()).min(minSteps).max(maxSteps),
             final: z.string(),
             confidence: z.number().min(0).max(1),
           }),
-          system: "You are a homework assistant. Provide clear, concise steps and a final answer.",
+          system:
+            normalizedStepsMode === "detailed"
+              ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
+              : "You are a homework assistant. Provide clear, concise steps and a final answer.",
           prompt: `Subject: ${subject.subject}\nMode: ${selectedMode}\nQuestion: ${question}\n${
             externalContext ? `\nContext:\n${externalContext}\n` : ""
-          }\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+          }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
         });
         const durationMs = Date.now() - startedAt;
 

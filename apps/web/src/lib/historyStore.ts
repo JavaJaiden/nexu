@@ -71,7 +71,9 @@ function normalizeTranscriptItem(raw: any): TranscriptItem | null {
     const selectionMode =
       raw.selectionMode === "single" || raw.selectionMode === "multi" ? raw.selectionMode : "auto";
     const selectedModelIds = Array.isArray(raw.selectedModelIds)
-      ? raw.selectedModelIds.filter((item: any) => typeof item === "string")
+      ? Array.from(
+          new Set(raw.selectedModelIds.filter((item: any) => typeof item === "string"))
+        )
       : [];
     const status = raw.status === "draft" ? "draft" : "final";
     const appliesTo =
@@ -122,6 +124,11 @@ function normalizeEntry(raw: any): HistoryEntry | null {
   const model = typeof raw.model === "string" ? raw.model : "Nexus-Core";
   const mode = raw.mode === "deep" ? "deep" : "fast";
 
+  const rawModels = Array.isArray(raw.models)
+    ? raw.models.filter((item: any) => typeof item === "string")
+    : [];
+  const normalizedModels = Array.from(new Set(rawModels));
+
   if (Array.isArray(raw.transcript)) {
     const normalizedTranscript = raw.transcript
       .map((item: any) => normalizeTranscriptItem(item))
@@ -131,7 +138,7 @@ function normalizeEntry(raw: any): HistoryEntry | null {
       question: raw.question,
       subject,
       model,
-      models: Array.isArray(raw.models) ? raw.models : [model],
+      models: normalizedModels.length ? normalizedModels : [model],
       transcript: normalizedTranscript,
       mode,
       createdAt,
@@ -170,7 +177,7 @@ function normalizeEntry(raw: any): HistoryEntry | null {
     question: raw.question,
     subject,
     model,
-    models: [model],
+    models: normalizedModels.length ? normalizedModels : [model],
     transcript,
     mode,
     createdAt,

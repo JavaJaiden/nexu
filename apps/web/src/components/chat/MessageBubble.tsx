@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState } from "react";
 import { Text, XStack, YStack, Button } from "tamagui";
-import { ChevronDown, ChevronUp, Bot, User, Clock, Sparkles, Users } from "lucide-react";
+import { ChevronDown, ChevronUp, Bot, Clock, Sparkles, Users } from "lucide-react";
 import type { MessageBubbleProps, ChatMessage, SolveOutput } from "./types";
 
 function formatLatency(ms?: number): string {
@@ -251,11 +251,9 @@ export default function MessageBubble({
   showSteps,
   showCitations,
   globalCollapsed,
-  modelMetaMap,
-  modelNameMap,
 }: MessageBubbleProps) {
-  const [localExpanded, setLocalExpanded] = useState(false);
-  const isExpanded = !globalCollapsed || localExpanded;
+  const [showIndividualResponses, setShowIndividualResponses] = useState(false);
+  const isExpanded = !globalCollapsed;
 
   // Parse tool outputs from message
   const toolData = useMemo(() => {
@@ -295,33 +293,11 @@ export default function MessageBubble({
     return { subject, routeModels, solveQuestions };
   }, [message, toolOverride, isUser]);
 
-  // User message
-  if (isUser) {
-    return (
-      <XStack justifyContent="flex-end" width="100%">
-        <YStack
-          maxWidth="85%"
-          padding="$md"
-          backgroundColor="$color"
-          borderRadius="$lg"
-          borderBottomRightRadius={4}
-        >
-          <Text fontSize={15} color="$background" lineHeight={1.5}>
-            {message.content}
-          </Text>
-        </YStack>
-      </XStack>
-    );
-  }
-
   // Assistant message
   const aggregateSolve = toolData?.solveQuestions.find((s) => s.kind === "aggregate");
   const baseSolves = toolData?.solveQuestions.filter((s) => s.kind !== "aggregate") ?? [];
   const finalSolve = aggregateSolve ?? baseSolves[baseSolves.length - 1];
   const isAggregated = Boolean(aggregateSolve);
-
-  // Individual responses toggle state
-  const [showIndividualResponses, setShowIndividualResponses] = useState(false);
 
   // Extract final answer text
   const finalAnswer = useMemo(() => {
@@ -371,6 +347,25 @@ export default function MessageBubble({
 
     return lines;
   }, [toolData]);
+
+  // User message
+  if (isUser) {
+    return (
+      <XStack justifyContent="flex-end" width="100%">
+        <YStack
+          maxWidth="85%"
+          padding="$md"
+          backgroundColor="$color"
+          borderRadius="$lg"
+          borderBottomRightRadius={4}
+        >
+          <Text fontSize={15} color="$background" lineHeight={1.5}>
+            {message.content}
+          </Text>
+        </YStack>
+      </XStack>
+    );
+  }
 
   return (
     <XStack justifyContent="flex-start" width="100%" gap="$sm">

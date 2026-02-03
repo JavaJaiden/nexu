@@ -20,7 +20,6 @@ export default function Timeline({
   onCompareRun,
   onToggleRunIndividual,
   onCopyModel,
-  onExpandModel,
 }: TimelineProps) {
   // Build a map of finalized snapshots by message ID
   const finalizedSnapshotsByMessage = useMemo(() => {
@@ -34,6 +33,16 @@ export default function Timeline({
       }
     });
     return map;
+  }, [entries]);
+
+  const messageIds = useMemo(() => {
+    const ids = new Set<string>();
+    entries.forEach((entry) => {
+      if (entry.kind === "message") {
+        ids.add(entry.message.id);
+      }
+    });
+    return ids;
   }, [entries]);
 
   // Group entries by their logical flow
@@ -59,7 +68,7 @@ export default function Timeline({
 
   return (
     <YStack gap="$lg" width="100%">
-      {groupedEntries.map(({ type, entry, index }) => {
+      {groupedEntries.map(({ entry }) => {
         // Message entry
         if (entry.kind === "message") {
           messageIndex++;
@@ -95,7 +104,11 @@ export default function Timeline({
         // Snapshot entry (draft only - finalized are shown with their messages)
         if (entry.kind === "snapshot") {
           // Skip finalized snapshots that apply to messages (already shown above)
-          if (entry.snapshot.status === "final" && entry.snapshot.appliesToMessageId) {
+          if (
+            entry.snapshot.status === "final" &&
+            entry.snapshot.appliesToMessageId &&
+            messageIds.has(entry.snapshot.appliesToMessageId)
+          ) {
             return null;
           }
 
@@ -119,11 +132,11 @@ export default function Timeline({
             <RunPanel
               run={run}
               modelNameMap={modelNameMap}
-              modelMetaMap={modelMetaMap}
+              showSteps={showSteps}
+              showCitations={showCitations}
               onCompare={() => onCompareRun(run.id)}
               onToggleIndividual={() => onToggleRunIndividual(run.id)}
               onCopy={(modelId) => onCopyModel(run.id, modelId)}
-              onExpand={(modelId) => onExpandModel(run.id, modelId)}
             />
           </YStack>
         );

@@ -2,6 +2,7 @@ export type RunModelInput = {
   modelId: string;
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   mode?: "fast" | "deep";
+  stepsMode?: "brief" | "detailed";
   signal?: AbortSignal;
   attachments?: Array<{ name: string; type: string; data: string }>;
 };
@@ -11,12 +12,19 @@ export type RunModelOutput = {
   latencyMs?: number;
   tokensIn?: number;
   tokensOut?: number;
+  steps?: string[];
+  confidence?: number;
+  citations?: string[];
+  selectionReason?: string;
+  gatewayNote?: string;
+  usedModel?: string;
 };
 
 export async function runModel({
   modelId,
   messages,
   mode = "fast",
+  stepsMode = "brief",
   signal,
   attachments,
 }: RunModelInput): Promise<RunModelOutput> {
@@ -29,6 +37,7 @@ export async function runModel({
       question,
       models: [modelId],
       mode,
+      stepsMode,
       attachments,
     }),
     signal,
@@ -42,6 +51,12 @@ export async function runModel({
   let buffer = "";
   let finalText = "";
   let latencyMs: number | undefined;
+  let steps: string[] | undefined;
+  let confidence: number | undefined;
+  let citations: string[] | undefined;
+  let selectionReason: string | undefined;
+  let gatewayNote: string | undefined;
+  let usedModel: string | undefined;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -56,6 +71,16 @@ export async function runModel({
       if (event.type === "result" && event.payload) {
         finalText = event.payload.final ?? "";
         latencyMs = event.payload.durationMs;
+        steps = Array.isArray(event.payload.steps) ? event.payload.steps : steps;
+        confidence = typeof event.payload.confidence === "number" ? event.payload.confidence : confidence;
+        citations = Array.isArray(event.payload.citations) ? event.payload.citations : citations;
+        selectionReason =
+          typeof event.payload.selectionReason === "string"
+            ? event.payload.selectionReason
+            : selectionReason;
+        gatewayNote =
+          typeof event.payload.gatewayNote === "string" ? event.payload.gatewayNote : gatewayNote;
+        usedModel = typeof event.payload.usedModel === "string" ? event.payload.usedModel : usedModel;
       }
     }
   }
@@ -67,6 +92,12 @@ export async function runModel({
   return {
     text: finalText,
     latencyMs,
+    steps,
+    confidence,
+    citations,
+    selectionReason,
+    gatewayNote,
+    usedModel,
   };
 }
 

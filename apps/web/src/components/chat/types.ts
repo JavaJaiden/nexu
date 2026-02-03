@@ -20,6 +20,12 @@ export type ModelResult = {
   tokensIn?: number;
   tokensOut?: number;
   text?: string;
+  steps?: string[];
+  confidence?: number;
+  citations?: string[];
+  selectionReason?: string;
+  gatewayNote?: string;
+  usedModel?: string;
   errorMessage?: string;
 };
 
@@ -88,6 +94,7 @@ export interface ComposerProps {
   onSend: () => void;
   onStop: () => void;
   isBusy: boolean;
+  isReadOnly?: boolean;
   attachments: PdfAttachment[];
   onRemoveAttachment: (index: number) => void;
   onFilesSelected: (files: FileList | null) => void;
@@ -108,11 +115,11 @@ export interface MessageBubbleProps {
 export interface RunPanelProps {
   run: MultiModelRun;
   modelNameMap: Map<string, string>;
-  modelMetaMap: Map<string, ModelCard>;
+  showSteps: boolean;
+  showCitations: boolean;
   onCompare: () => void;
   onToggleIndividual: () => void;
   onCopy: (modelId: string) => void;
-  onExpand: (modelId: string) => void;
 }
 
 export interface TimelineProps {
@@ -128,5 +135,4 @@ export interface TimelineProps {
   onCompareRun: (runId: string) => void;
   onToggleRunIndividual: (runId: string) => void;
   onCopyModel: (runId: string, modelId: string) => void;
-  onExpandModel: (runId: string, modelId: string) => void;
 }

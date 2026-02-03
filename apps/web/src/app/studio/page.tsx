@@ -93,7 +93,9 @@ function StudioPageContent() {
   useEffect(() => {
     const stackParam = searchParams.get("stack");
     if (stackParam) {
-      const stack = stackParam.split(",").map((s) => s.trim()).filter(Boolean);
+      const stack = Array.from(
+        new Set(stackParam.split(",").map((s) => s.trim()).filter(Boolean))
+      );
       if (stack.length > 0) {
         setPreferredModels(stack);
         setSelectedProjectId(null);
@@ -107,20 +109,6 @@ function StudioPageContent() {
     () => projects.find((p) => p.id === selectedProjectId) ?? null,
     [projects, selectedProjectId]
   );
-
-  // Build initial messages from project
-  const initialMessages = useMemo(() => {
-    if (!activeProject) return undefined;
-    let index = 0;
-    return activeProject.transcript
-      .filter((item): item is TranscriptMessage => "role" in item)
-      .map((msg) => ({
-        id: `${activeProject.id}-${index++}`,
-        role: msg.role,
-        content: msg.content ?? "",
-        snapshotId: msg.snapshotId,
-      }));
-  }, [activeProject]);
 
   // Build initial timeline from project
   const initialTimeline = useMemo((): ChatEntry[] | undefined => {
@@ -196,7 +184,9 @@ function StudioPageContent() {
 
   // Get selected model details
   const selectedModelDetails = useMemo(() => {
-    return preferredModels.map((id) => modelMetaMap.get(id)).filter(Boolean) as ModelCard[];
+    return Array.from(new Set(preferredModels))
+      .map((id) => modelMetaMap.get(id))
+      .filter(Boolean) as ModelCard[];
   }, [preferredModels, modelMetaMap]);
 
   // Get aggregator model details
@@ -242,8 +232,9 @@ function StudioPageContent() {
       const shouldOverrideModels = hasRun || !existing;
       const normalizedModels =
         models.length && shouldOverrideModels ? models : existing?.models ?? models;
-      const model = normalizedModels[0] ?? existing?.model ?? "Nexus-Core";
-      const finalModels = normalizedModels.length ? normalizedModels : [model];
+      const dedupedModels = Array.from(new Set(normalizedModels.filter(Boolean)));
+      const model = dedupedModels[0] ?? existing?.model ?? "Nexus-Core";
+      const finalModels = dedupedModels.length ? dedupedModels : [model];
 
       const nextEntry: HistoryEntry = {
         id: chatId,
@@ -355,6 +346,7 @@ function StudioPageContent() {
                       {groupedProjects.slice(0, showGroupedCount).map((project) => {
                         const isActive = project.id === selectedProjectId;
                         const title = getProjectTitle(project);
+                        const uniqueModels = Array.from(new Set(project.models));
                         return (
                           <Button
                             key={project.id}
@@ -384,14 +376,14 @@ function StudioPageContent() {
                                   </Text>
                                 </XStack>
                                 <XStack alignItems="center" gap="$xs">
-                                  {project.models.slice(0, 3).map((modelId) => (
+                                  {uniqueModels.slice(0, 3).map((modelId) => (
                                     <Text key={modelId} fontSize={10} color={colors.textSecondary}>
                                       {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
                                     </Text>
                                   ))}
-                                  {project.models.length > 3 && (
+                                  {uniqueModels.length > 3 && (
                                     <Text fontSize={10} color={colors.textMuted}>
-                                      +{project.models.length - 3}
+                                      +{uniqueModels.length - 3}
                                     </Text>
                                   )}
                                 </XStack>
@@ -423,38 +415,41 @@ function StudioPageContent() {
                       Saved Presets
                     </Text>
                     <YStack gap="$xs">
-                      {labPresets.slice(0, 5).map((preset) => (
-                        <Button
-                          key={preset.id}
-                          size="$3"
-                          backgroundColor="transparent"
-                          borderWidth={1}
-                          borderColor={colors.border}
-                          justifyContent="flex-start"
-                          onPress={() => setPreferredModels(preset.models)}
-                        >
-                          <YStack alignItems="flex-start" gap="$xs">
-                            <XStack alignItems="center" gap="$xs">
-                              <Layers size={12} color={colors.accent} />
-                              <Text fontSize={13} fontWeight="500" color={colors.text}>
-                                {preset.name}
-                              </Text>
-                            </XStack>
-                            <XStack alignItems="center" gap="$xs">
-                              {preset.models.slice(0, 3).map((modelId) => (
-                                <Text key={modelId} fontSize={10} color={colors.textSecondary}>
-                                  {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                      {labPresets.slice(0, 5).map((preset) => {
+                        const uniquePresetModels = Array.from(new Set(preset.models));
+                        return (
+                          <Button
+                            key={preset.id}
+                            size="$3"
+                            backgroundColor="transparent"
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            justifyContent="flex-start"
+                            onPress={() => setPreferredModels(uniquePresetModels)}
+                          >
+                            <YStack alignItems="flex-start" gap="$xs">
+                              <XStack alignItems="center" gap="$xs">
+                                <Layers size={12} color={colors.accent} />
+                                <Text fontSize={13} fontWeight="500" color={colors.text}>
+                                  {preset.name}
                                 </Text>
-                              ))}
-                              {preset.models.length > 3 && (
-                                <Text fontSize={10} color={colors.textMuted}>
-                                  +{preset.models.length - 3}
-                                </Text>
-                              )}
-                            </XStack>
-                          </YStack>
-                        </Button>
-                      ))}
+                              </XStack>
+                              <XStack alignItems="center" gap="$xs">
+                                {uniquePresetModels.slice(0, 3).map((modelId) => (
+                                  <Text key={modelId} fontSize={10} color={colors.textSecondary}>
+                                    {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                                  </Text>
+                                ))}
+                                {uniquePresetModels.length > 3 && (
+                                  <Text fontSize={10} color={colors.textMuted}>
+                                    +{uniquePresetModels.length - 3}
+                                  </Text>
+                                )}
+                              </XStack>
+                            </YStack>
+                          </Button>
+                        );
+                      })}
                     </YStack>
                   </YStack>
                 )}
@@ -743,7 +738,6 @@ function StudioPageContent() {
                 collapseAll={collapseAll}
                 modelMetaMap={modelMetaMap}
                 modelNameMap={modelNameMap}
-                initialMessages={initialMessages}
                 initialTimeline={initialTimeline}
                 toolOverrides={toolOverrides}
                 toolOverridesByIndex={toolOverridesByIndex}

@@ -142,7 +142,7 @@ export default function CompareOverlay({
               borderWidth={0}
               color="$color"
               onPress={onClose}
-              icon={<X size={20} />}
+              icon={<X size={20} color="var(--color)" />}
             />
           </XStack>
         </XStack>
@@ -173,7 +173,7 @@ export default function CompareOverlay({
               >
                 <XStack alignItems="center" gap="$xs">
                   {result && <StatusIcon status={result.status} />}
-                  <Text fontSize={13}>
+                  <Text fontSize={13} color={isSelected ? "$background" : "$color"}>
                     {modelNameMap.get(modelId) ?? modelId}
                   </Text>
                 </XStack>

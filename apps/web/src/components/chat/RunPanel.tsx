@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Copy,
-  Maximize2,
   Clock,
   Eye,
   EyeOff,
@@ -51,9 +50,10 @@ function ProgressBar({
   failed: number;
   cancelled: number;
 }) {
-  const completePct = Math.round((complete / total) * 100);
-  const failedPct = Math.round((failed / total) * 100);
-  const cancelledPct = Math.round((cancelled / total) * 100);
+  const safeTotal = total > 0 ? total : 1;
+  const completePct = Math.round((complete / safeTotal) * 100);
+  const failedPct = Math.round((failed / safeTotal) * 100);
+  const cancelledPct = Math.round((cancelled / safeTotal) * 100);
 
   return (
     <YStack gap="$xs">
@@ -97,113 +97,41 @@ function ProgressBar({
   );
 }
 
-function ModelPreviewCard({
+function ModelAnswerCard({
   result,
   modelName,
-  onExpand,
-}: {
-  result: ModelResult;
-  modelName: string;
-  onExpand: () => void;
-}) {
-  const isError = result.status === "error" || result.status === "cancelled";
-  const [isHovered, setIsHovered] = useState(false);
-
-  // Truncate text for preview
-  const previewText = result.text 
-    ? result.text.slice(0, 120) + (result.text.length > 120 ? "..." : "")
-    : "No response";
-
-  return (
-    <YStack
-      flex={1}
-      minWidth={260}
-      maxWidth={360}
-      padding="$md"
-      backgroundColor="$background"
-      borderRadius="$lg"
-      borderWidth={2}
-      borderColor={isError ? "$orange10" : isHovered ? "$color" : "$border"}
-      gap="$sm"
-      hoverStyle={{
-        borderColor: "$color",
-        transform: "translateY(-2px)",
-        shadowColor: "$color",
-        shadowOffset: { width: 0, height: 4 },
-        shadowRadius: 12,
-        shadowOpacity: 0.1,
-      }}
-      animation="fast"
-      onHoverIn={() => setIsHovered(true)}
-      onHoverOut={() => setIsHovered(false)}
-      cursor="pointer"
-      onPress={onExpand}
-    >
-      {/* Header */}
-      <XStack justifyContent="space-between" alignItems="center">
-        <XStack alignItems="center" gap="$sm">
-          <StatusIcon status={result.status} />
-          <Text fontSize={14} fontWeight="600" color="$color">
-            {modelName}
-          </Text>
-        </XStack>
-        <XStack 
-          padding="$xs" 
-          paddingHorizontal="$sm"
-          backgroundColor="$backgroundSecondary"
-          borderRadius="$md"
-          alignItems="center"
-          gap="$xs"
-        >
-          <Clock size={12} color="var(--colorTextMuted)" />
-          <Text fontSize={11} color="$textMuted">
-            {formatLatency(result.latencyMs)}
-          </Text>
-        </XStack>
-      </XStack>
-
-      {/* Preview Content */}
-      {result.status === "complete" ? (
-        <YStack gap="$xs">
-          <Text
-            fontSize={13}
-            color="$color"
-            lineHeight={1.5}
-            numberOfLines={3}
-          >
-            {previewText}
-          </Text>
-          <Text fontSize={12} color="$textMuted" marginTop="$xs">
-            Click to expand →
-          </Text>
-        </YStack>
-      ) : (
-        <Text fontSize={13} color="$textMuted">
-          {result.errorMessage ?? "Model failed to respond"}
-        </Text>
-      )}
-    </YStack>
-  );
-}
-
-function ExpandedModelCard({
-  result,
-  modelName,
+  showSteps,
+  showCitations,
+  isExpanded,
+  onToggleDetails,
   onCopy,
-  onCollapse,
 }: {
   result: ModelResult;
   modelName: string;
+  showSteps: boolean;
+  showCitations: boolean;
+  isExpanded: boolean;
+  onToggleDetails: () => void;
   onCopy: () => void;
-  onCollapse: () => void;
 }) {
   const isError = result.status === "error" || result.status === "cancelled";
+  const hasSteps = showSteps && Array.isArray(result.steps) && result.steps.length > 0;
+  const hasCitations =
+    showCitations && Array.isArray(result.citations) && result.citations.length > 0;
+  const hasMeta =
+    typeof result.confidence === "number" ||
+    Boolean(result.selectionReason) ||
+    Boolean(result.gatewayNote) ||
+    Boolean(result.tokensIn) ||
+    Boolean(result.tokensOut) ||
+    (result.usedModel && result.usedModel !== result.modelId);
+  const hasDetails = result.status === "complete" && (hasSteps || hasCitations || hasMeta);
 
   return (
     <YStack
       flex={1}
       minWidth={280}
-      maxWidth={480}
+      maxWidth={520}
       padding="$lg"
       backgroundColor="$background"
       borderRadius="$lg"
@@ -211,70 +139,141 @@ function ExpandedModelCard({
       borderColor={isError ? "$orange10" : "$border"}
       gap="$md"
     >
-      {/* Header */}
-      <XStack justifyContent="space-between" alignItems="center">
-        <XStack alignItems="center" gap="$sm">
+      <XStack justifyContent="space-between" alignItems="center" gap="$sm" flexWrap="wrap">
+        <XStack alignItems="center" gap="$sm" flex={1}>
           <StatusIcon status={result.status} />
           <Text fontSize={15} fontWeight="600" color="$color">
             {modelName}
           </Text>
         </XStack>
-        <XStack gap="$xs">
-          <Button
-            size="$2"
-            backgroundColor="transparent"
-            borderWidth={1}
-            borderColor="$border"
-            onPress={onCopy}
-            icon={<Copy size={14} color="var(--colorTextMuted)" />}
+
+        <XStack gap="$xs" alignItems="center">
+          <XStack
+            padding="$xs"
+            paddingHorizontal="$sm"
+            backgroundColor="$backgroundSecondary"
+            borderRadius="$md"
+            alignItems="center"
+            gap="$xs"
           >
-            Copy
-          </Button>
-          <Button
-            size="$2"
-            backgroundColor="transparent"
-            borderWidth={1}
-            borderColor="$border"
-            onPress={onCollapse}
-            icon={<ChevronUp size={14} color="var(--colorTextMuted)" />}
-          >
-            Collapse
-          </Button>
+            <Clock size={12} color="var(--colorTextMuted)" />
+            <Text fontSize={11} color="$textMuted">
+              {formatLatency(result.latencyMs)}
+            </Text>
+          </XStack>
+
+          {result.status === "complete" && (
+            <Button
+              size="$2"
+              backgroundColor="transparent"
+              borderWidth={1}
+              borderColor="$border"
+              onPress={onCopy}
+              icon={<Copy size={14} color="var(--colorTextMuted)" />}
+            >
+              Copy
+            </Button>
+          )}
+
+          {hasDetails && (
+            <Button
+              size="$2"
+              backgroundColor="transparent"
+              borderWidth={1}
+              borderColor="$border"
+              onPress={onToggleDetails}
+              icon={
+                isExpanded ? (
+                  <ChevronUp size={14} color="var(--colorTextMuted)" />
+                ) : (
+                  <ChevronDown size={14} color="var(--colorTextMuted)" />
+                )
+              }
+            >
+              {isExpanded ? "Hide Details" : "Details"}
+            </Button>
+          )}
         </XStack>
       </XStack>
 
-      {/* Metadata */}
-      {result.status === "complete" && (
-        <XStack alignItems="center" gap="$xs">
-          <Clock size={12} color="var(--colorTextMuted)" />
-          <Text fontSize={12} color="$textMuted">
-            {formatLatency(result.latencyMs)}
-          </Text>
-          {result.tokensOut && (
-            <>
-              <Text fontSize={12} color="$textMuted">•</Text>
-              <Text fontSize={12} color="$textMuted">
-                {result.tokensOut} tokens
-              </Text>
-            </>
-          )}
-        </XStack>
-      )}
-
-      {/* Full Content */}
       {result.status === "complete" ? (
-        <Text
-          fontSize={14}
-          color="$color"
-          lineHeight={1.6}
-          whiteSpace="pre-wrap"
-        >
-          {result.text}
+        <Text fontSize={14} color="$color" lineHeight={1.6} whiteSpace="pre-wrap">
+          {result.text ?? "No response"}
         </Text>
       ) : (
         <Text fontSize={14} color="$textMuted">
           {result.errorMessage ?? "Model failed to respond"}
         </Text>
+      )}
+
+      {hasDetails && isExpanded && (
+        <YStack
+          gap="$sm"
+          paddingTop="$sm"
+          borderTopWidth={1}
+          borderColor="$border"
+        >
+          {hasSteps && (
+            <YStack gap="$xs">
+              <Text fontSize={12} fontWeight="600" color="$textMuted">
+                Steps
+              </Text>
+              {result.steps!.map((step, index) => (
+                <XStack key={index} gap="$sm" alignItems="flex-start">
+                  <Text fontSize={12} color="$textMuted" fontWeight="600" minWidth={20}>
+                    {index + 1}.
+                  </Text>
+                  <Text fontSize={13} color="$color" flex={1} lineHeight={1.5}>
+                    {step}
+                  </Text>
+                </XStack>
+              ))}
+            </YStack>
+          )}
+
+          {hasCitations && (
+            <YStack gap="$xs">
+              <Text fontSize={12} fontWeight="600" color="$textMuted">
+                Citations
+              </Text>
+              {result.citations!.map((citation, index) => (
+                <Text key={index} fontSize={12} color="$textMuted">
+                  • {citation}
+                </Text>
+              ))}
+            </YStack>
+          )}
+
+          {typeof result.confidence === "number" && (
+            <Text fontSize={12} color="$success">
+              Confidence: {Math.round(result.confidence * 100)}%
+            </Text>
+          )}
+
+          {result.usedModel && result.usedModel !== result.modelId && (
+            <Text fontSize={12} color="$textMuted">
+              Routed to: {result.usedModel}
+            </Text>
+          )}
+
+          {result.selectionReason && (
+            <Text fontSize={12} color="$textMuted">
+              Selection: {result.selectionReason}
+            </Text>
+          )}
+
+          {result.gatewayNote && (
+            <Text fontSize={12} color="$textMuted">
+              Gateway: {result.gatewayNote}
+            </Text>
+          )}
+
+          {(result.tokensIn || result.tokensOut) && (
+            <Text fontSize={12} color="$textMuted">
+              Tokens: {result.tokensIn ?? "—"} in • {result.tokensOut ?? "—"} out
+            </Text>
+          )}
+        </YStack>
       )}
     </YStack>
   );
@@ -330,11 +329,11 @@ function AggregatedCard({
 export default function RunPanel({
   run,
   modelNameMap,
-  modelMetaMap,
+  showSteps,
+  showCitations,
   onCompare,
   onToggleIndividual,
   onCopy,
-  onExpand,
 }: RunPanelProps) {
   const results = useMemo(
     () => run.selectedModels.map((id) => run.resultsByModel[id]).filter(Boolean),
@@ -342,6 +341,7 @@ export default function RunPanel({
   );
 
   const hasErrors = run.counts.failed > 0 || run.counts.cancelled > 0;
+  const hasIndividuals = results.length > 0;
   
   // Track which cards are expanded
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
@@ -402,6 +402,8 @@ export default function RunPanel({
             borderRadius="$md"
             onPress={onToggleIndividual}
             icon={run.showIndividual ? <EyeOff size={16} /> : <Eye size={16} />}
+            disabled={!hasIndividuals}
+            opacity={hasIndividuals ? 1 : 0.5}
           >
             {run.showIndividual ? "Hide Individual" : "Show Individual"}
           </Button>
@@ -433,7 +435,7 @@ export default function RunPanel({
       />
 
       {/* Individual Results - Toggleable */}
-      {run.showIndividual && (
+      {run.showIndividual && hasIndividuals && (
         <YStack gap="$sm" marginTop="$xs">
           <XStack justifyContent="space-between" alignItems="center">
             <Text fontSize={14} fontWeight="600" color="$color">
@@ -447,21 +449,17 @@ export default function RunPanel({
           <XStack flexWrap="wrap" gap="$md">
             {results.map((result) => {
               const isExpanded = expandedCards.has(result.modelId);
-              
-              return isExpanded ? (
-                <ExpandedModelCard
+
+              return (
+                <ModelAnswerCard
                   key={result.modelId}
                   result={result}
                   modelName={modelNameMap.get(result.modelId) ?? result.modelId}
+                  showSteps={showSteps}
+                  showCitations={showCitations}
+                  isExpanded={isExpanded}
                   onCopy={() => onCopy(result.modelId)}
-                  onCollapse={() => handleToggleCard(result.modelId)}
-                />
-              ) : (
-                <ModelPreviewCard
-                  key={result.modelId}
-                  result={result}
-                  modelName={modelNameMap.get(result.modelId) ?? result.modelId}
-                  onExpand={() => handleToggleCard(result.modelId)}
+                  onToggleDetails={() => handleToggleCard(result.modelId)}
                 />
               );
             })}

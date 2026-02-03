@@ -87,7 +87,7 @@ export async function POST(req: Request) {
     return new Response("Missing OPENAI_API_KEY", { status: 500 });
   }
 
-  const { messages, mode, preferredModel, preferredModels, aggregatorModel, attachments } =
+  const { messages, mode, preferredModel, preferredModels, aggregatorModel, attachments, stepsMode } =
     (await req.json()) as {
       messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
       mode?: "fast" | "deep";
@@ -95,6 +95,7 @@ export async function POST(req: Request) {
       preferredModels?: string[];
       aggregatorModel?: string;
       attachments?: Array<{ name: string; type: string; data: string }>;
+      stepsMode?: "brief" | "detailed";
     };
 
   const selectedMode = mode ?? "fast";
@@ -110,6 +111,9 @@ export async function POST(req: Request) {
   const preferredIsNexus = preferredLabel ? preferredLabel in modelLabelToId : false;
   const preferredIsExternal = Boolean(preferredLabel && !preferredIsNexus && preferredLabel !== "auto");
   const usageCounts: Record<string, number> = {};
+  const normalizedStepsMode = stepsMode === "detailed" ? "detailed" : "brief";
+  const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
+  const maxSteps = normalizedStepsMode === "detailed" ? 8 : 5;
 
   const externalContext = await buildExternalContext(
     inputMessages.map((message) => message.content).join("\n"),
@@ -223,14 +227,17 @@ Keep answers structured and homework-safe.`,
             const result = await generateObject({
               model: gateway.model,
               schema: z.object({
-                steps: z.array(z.string()).min(2).max(6),
+                steps: z.array(z.string()).min(minSteps).max(maxSteps),
                 final: z.string(),
                 confidence: z.number().min(0).max(1),
               }),
-              system: "You are a homework assistant. Provide clear, concise steps and a final answer.",
+              system:
+                normalizedStepsMode === "detailed"
+                  ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
+                  : "You are a homework assistant. Provide clear, concise steps and a final answer.",
               prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
                 externalContext ? `\nContext:\n${externalContext}\n` : ""
-              }\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+              }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
             });
             const durationMs = Date.now() - startedAt;
 
@@ -259,17 +266,19 @@ Keep answers structured and homework-safe.`,
           const aggregateResult = await generateObject({
             model: aggregatorGateway.model,
             schema: z.object({
-              steps: z.array(z.string()).min(2).max(6),
+              steps: z.array(z.string()).min(minSteps).max(maxSteps),
               final: z.string(),
               confidence: z.number().min(0).max(1),
             }),
             system:
-              "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
+              normalizedStepsMode === "detailed"
+                ? "You are an aggregator. Combine multiple model answers into one clear, student-friendly response with detailed steps and a final answer."
+                : `You are an aggregator. Combine multiple model answers into one clear, concise response with ${minSteps}-${maxSteps} steps and a final answer.`,
             prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
               externalContext ? `\nContext:\n${externalContext}\n` : ""
             }\nModel answers:\n${solveOutputs
               .map((solve, index) => `Answer ${index + 1} (${solve.model}): ${solve.final}`)
-              .join("\n")}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+              .join("\n")}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
           });
           const aggregateDuration = Date.now() - aggregatorStarted;
           const aggregateSelectionReason =
