@@ -1,5 +1,5 @@
-import { useUser } from "@clerk/clerk-expo";
-import { Plus, Search } from "@tamagui/lucide-icons";
+import { useUser, useAuth } from "@clerk/clerk-expo";
+import { Plus, Search, LogOut } from "@tamagui/lucide-icons";
 import { api } from "@packages/backend/convex/_generated/api";
 import { useQuery } from "convex/react";
 import { useState } from "react";
@@ -17,8 +17,19 @@ import {
 
 const NotesDashboardScreen = ({ navigation }: { navigation: any }) => {
   const user = useUser();
+  const { signOut } = useAuth();
   const imageUrl = user?.user?.imageUrl;
   const firstName = user?.user?.firstName;
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      // Navigation will automatically redirect to LoginScreen
+      // because of the auth state change in Navigation.tsx
+    } catch (error) {
+      console.error("Error signing out:", error);
+    }
+  };
 
   const allNotes = useQuery(api.notes.getNotes);
   const [search, setSearch] = useState("");
@@ -84,25 +95,35 @@ const NotesDashboardScreen = ({ navigation }: { navigation: any }) => {
             {firstName || "Notes"}
           </H2>
         </YStack>
-        {imageUrl ? (
-          <Avatar circular size="$3">
-            <Avatar.Image src={imageUrl} />
-            <Avatar.Fallback backgroundColor="$backgroundSecondary" />
-          </Avatar>
-        ) : (
-          <YStack
-            width={36}
-            height={36}
-            borderRadius={18}
-            backgroundColor="$backgroundSecondary"
-            alignItems="center"
-            justifyContent="center"
-          >
-            <Text fontSize={16} fontWeight="500" color="$color">
-              {firstName?.[0] || "U"}
-            </Text>
-          </YStack>
-        )}
+        <XStack alignItems="center" gap="$sm">
+          {imageUrl ? (
+            <Avatar circular size="$3">
+              <Avatar.Image src={imageUrl} />
+              <Avatar.Fallback backgroundColor="$backgroundSecondary" />
+            </Avatar>
+          ) : (
+            <YStack
+              width={36}
+              height={36}
+              borderRadius={18}
+              backgroundColor="$backgroundSecondary"
+              alignItems="center"
+              justifyContent="center"
+            >
+              <Text fontSize={16} fontWeight="500" color="$color">
+                {firstName?.[0] || "U"}
+              </Text>
+            </YStack>
+          )}
+          <Button
+            size="$2"
+            backgroundColor="transparent"
+            borderWidth={0}
+            paddingHorizontal="$sm"
+            onPress={handleSignOut}
+            icon={<LogOut size={18} color="#666" />}
+          />
+        </XStack>
       </XStack>
 
       {/* Search */}

@@ -71,7 +71,7 @@ function normalizeTranscriptItem(raw: any): TranscriptItem | null {
     const selectionMode =
       raw.selectionMode === "single" || raw.selectionMode === "multi" ? raw.selectionMode : "auto";
     const selectedModelIds = Array.isArray(raw.selectedModelIds)
-      ? raw.selectedModelIds.filter((item) => typeof item === "string")
+      ? raw.selectedModelIds.filter((item: any) => typeof item === "string")
       : [];
     const status = raw.status === "draft" ? "draft" : "final";
     const appliesTo =
@@ -124,8 +124,8 @@ function normalizeEntry(raw: any): HistoryEntry | null {
 
   if (Array.isArray(raw.transcript)) {
     const normalizedTranscript = raw.transcript
-      .map((item) => normalizeTranscriptItem(item))
-      .filter((item): item is TranscriptItem => Boolean(item));
+      .map((item: any) => normalizeTranscriptItem(item))
+      .filter((item: any): item is TranscriptItem => Boolean(item));
     return {
       id: raw.id,
       question: raw.question,

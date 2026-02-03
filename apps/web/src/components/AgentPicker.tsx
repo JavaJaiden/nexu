@@ -148,7 +148,7 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
   const [activeIndex, setActiveIndex] = useState(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const searchRef = useRef<HTMLInputElement | null>(null);
+  const searchRef = useRef<any>(null);
 
   const options = useMemo(() => {
     return models.map((model) => ({
@@ -310,7 +310,6 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
           borderRadius="$md"
           backgroundColor="$background"
           overflow="hidden"
-          onKeyDown={handleKeyDown}
         >
           <YStack padding="$sm" borderBottomWidth={1} borderColor="$border" gap="$sm">
             <XStack alignItems="center" gap="$xs">
@@ -329,7 +328,7 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
             </XStack>
           </YStack>
 
-          <YStack flex={1} overflowY="auto" padding="$sm" gap="$lg">
+          <YStack flex={1} overflow="scroll" padding="$sm" gap="$lg">
             <AgentSection
               title="Quick Agents"
               icon={<Zap size={14} color="#22C55E" />}

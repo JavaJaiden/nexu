@@ -13,7 +13,7 @@ type ComposerActionMenuProps = {
   onToggleCitations: () => void;
   onToggleSteps: () => void;
   onModeChange: (mode: "fast" | "deep") => void;
-  menuRef: React.RefObject<HTMLDivElement>;
+  menuRef: React.RefObject<HTMLDivElement | null>;
 };
 
 export default function ComposerActionMenu({

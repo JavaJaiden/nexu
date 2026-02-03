@@ -47,7 +47,7 @@ export default function CompactComposer({
 }: CompactComposerProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const textAreaRef = useRef<any>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const actionButtonRef = useRef<any>(null);
 
@@ -102,7 +102,8 @@ export default function CompactComposer({
             color="$color"
             borderRadius="$full"
             onPress={() => setMenuOpen((prev) => !prev)}
-            icon={<Plus size={16} />}
+            icon={<Plus size={16} color="currentColor" />}
+            hoverStyle={{ borderColor: "$color" }}
           />
           <ComposerActionMenu
             open={menuOpen}
@@ -130,13 +131,8 @@ export default function CompactComposer({
             backgroundColor="$background"
             fontSize={14}
             padding="$sm"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                onSend();
-              }
-            }}
-            style={{ resize: "none", overflow: "auto" }}
+            
+            style={{ resize: "none", overflow: "auto" } as any}
           />
           {attachments.length > 0 && (
             <XStack flexWrap="wrap" gap="$xs" marginTop="$xs">

@@ -1,769 +1,785 @@
 "use client";
 
-import Header from "@/components/Header";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, H1, Paragraph, Text, TextArea, XStack, YStack } from "tamagui";
-import { Paperclip, X } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
-  loadLabExperiments,
+  Button,
+  H1,
+  H2,
+  Paragraph,
+  Text,
+  XStack,
+  YStack,
+  Input,
+} from "tamagui";
+import {
+  Beaker,
+  Upload,
+  FileText,
+  Database,
+  Bot,
+  Workflow,
+  Search,
+  Grid3X3,
+  List,
+  Plus,
+  MoreHorizontal,
+  X,
+  ChevronRight,
+  Lock,
+  Users,
+  Star,
+  Clock,
+  Sparkles,
+  Filter,
+  Settings,
+  Trash2,
+  Edit3,
+  Play,
+  Layers,
+} from "lucide-react";
+import Header from "@/components/Header";
+import { useThemeSetting } from "@/lib/themeContext";
+import { getProviderIcon, getModelHubCards, type ModelCard } from "@/lib/modelCatalog";
+import {
   loadLabPresets,
   removeLabPreset,
-  upsertLabExperiment,
-  upsertLabPreset,
-  type LabExperiment,
   type LabPreset,
 } from "@/lib/labStore";
-import { externalProviders, getModelHubCards, routerModels } from "@/lib/modelCatalog";
-import type { PdfAttachment } from "@/lib/externalContext";
-import { fileToAttachment, isPdfFile } from "@/lib/attachments";
-import AgentPicker from "@/components/AgentPicker";
 
+// ============================================================================
+// TYPES
+// ============================================================================
 
-const subjects = [
-  "General",
-  "Mathematics",
-  "Physics",
-  "Computer Science",
-  "Writing",
-  "History",
-];
+type AssetType = "model" | "dataset" | "file" | "agent" | "workflow" | "pipeline";
+type AssetScope = "private" | "organization";
+type ComplexityLevel = "simple" | "moderate" | "advanced" | "enterprise";
 
-type CompareResult = {
-  model: string;
-  usedModel: string;
-  final: string;
-  steps: string[];
-  confidence: number;
-  durationMs: number;
-  gatewayNote?: string;
-  selectionReason?: string;
+interface Asset {
+  id: string;
+  name: string;
+  type: AssetType;
+  scope: AssetScope;
+  complexity: ComplexityLevel;
+  description?: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  author: string;
+  usageCount: number;
+  rating?: number;
+  icon?: string;
+  models?: string[];
+}
+
+// ============================================================================
+// MOCK DATA & UTILS
+// ============================================================================
+
+const assetTypeIcons: Record<AssetType, typeof Beaker> = {
+  model: Bot,
+  dataset: Database,
+  file: FileText,
+  agent: Sparkles,
+  workflow: Workflow,
+  pipeline: Layers,
 };
 
-type ConsensusResult = {
-  model: string;
-  final: string;
-  steps: string[];
-  confidence: number;
-  durationMs: number;
-  gatewayNote?: string;
-  selectionReason?: string;
+const assetTypeColors: Record<AssetType, string> = {
+  model: "#22C55E",
+  dataset: "#3B82F6",
+  file: "#F59E0B",
+  agent: "#8B5CF6",
+  workflow: "#EC4899",
+  pipeline: "#14B8A6",
 };
 
-export default function LabPage() {
-  const allModels = useMemo(() => {
-    const externalModels = externalProviders.flatMap((provider) =>
-      provider.models.map((model) => ({
-        id: model.id,
-        name: model.name,
-        type: "Model",
-        provider: provider.label,
-      }))
-    );
-    const routerCards = routerModels.map((router) => ({
-      id: router.id,
-      name: router.name,
-      type: "Router",
-      provider: router.provider,
-    }));
-    return [...routerCards, ...externalModels];
-  }, []);
+const complexityLabels: Record<ComplexityLevel, string> = {
+  simple: "Simple",
+  moderate: "Moderate",
+  advanced: "Advanced",
+  enterprise: "Enterprise",
+};
 
-  const modelCatalog = useMemo(() => getModelHubCards(), []);
+// Convert presets to assets
+function presetsToAssets(presets: LabPreset[]): Asset[] {
+  return presets.map((preset) => ({
+    id: preset.id,
+    name: preset.name,
+    type: "model",
+    scope: "private",
+    complexity: "simple",
+    description: `${preset.models.length} models for ${preset.subject || "general"} tasks`,
+    tags: [preset.subject || "General", "preset"],
+    createdAt: preset.createdAt,
+    updatedAt: preset.createdAt,
+    author: "You",
+    usageCount: 0,
+    models: preset.models,
+  }));
+}
 
-  const modelNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    allModels.forEach((model) => map.set(model.id, model.name));
-    return map;
-  }, [allModels]);
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
 
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [modelSearch, setModelSearch] = useState("");
-  const [question, setQuestion] = useState("");
-  const [attachments, setAttachments] = useState<PdfAttachment[]>([]);
-  const [mode, setMode] = useState<"fast" | "deep">("fast");
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [results, setResults] = useState<CompareResult[]>([]);
-  const [consensus, setConsensus] = useState<ConsensusResult | null>(null);
-  const [autoConsensus, setAutoConsensus] = useState(true);
-  const [aggregatorModel, setAggregatorModel] = useState("auto");
-  const [presetName, setPresetName] = useState("");
-  const [presetSubject, setPresetSubject] = useState("General");
-  const [presets, setPresets] = useState<LabPreset[]>([]);
-  const [experiments, setExperiments] = useState<LabExperiment[]>([]);
-  const [currentExperimentId, setCurrentExperimentId] = useState<string | null>(null);
-  const [bestModel, setBestModel] = useState<string | null>(null);
-  const [modelNotes, setModelNotes] = useState<Record<string, string>>({});
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+export default function LaboratoryPage() {
+  const router = useRouter();
+  const { theme } = useThemeSetting();
+  const isDark = theme === "dark";
 
-  useEffect(() => {
-    setPresets(loadLabPresets());
-    setExperiments(loadLabExperiments());
-  }, []);
-
-  const selectedModels = useMemo(
-    () => allModels.filter((model) => selectedIds.has(model.id)),
-    [allModels, selectedIds]
+  // Theme colors
+  const colors = useMemo(
+    () => ({
+      bg: isDark ? "#0a0a0b" : "#ffffff",
+      bgSecondary: isDark ? "#141415" : "#f8f9fa",
+      bgTertiary: isDark ? "#1a1a1b" : "#f1f3f5",
+      border: isDark ? "#2a2a2b" : "#e9ecef",
+      text: isDark ? "#ffffff" : "#111827",
+      textMuted: isDark ? "#9CA3AF" : "#6b7280",
+      textSecondary: isDark ? "#6b7280" : "#9ca3af",
+      accent: "#22C55E",
+      accentBg: isDark ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.1)",
+      gold: "#F59E0B",
+      blue: "#3B82F6",
+      red: "#EF4444",
+    }),
+    [isDark]
   );
 
-  const filteredModels = useMemo(() => {
-    const query = modelSearch.trim().toLowerCase();
-    if (!query) return allModels;
-    return allModels.filter((model) => {
-      const haystack = `${model.name} ${model.provider} ${model.type}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [allModels, modelSearch]);
+  // State
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [scopeFilter, setScopeFilter] = useState<AssetScope | "all">("all");
+  const [typeFilter, setTypeFilter] = useState<AssetType | "all">("all");
+  const [sortBy, setSortBy] = useState<"recent" | "usage" | "rating">("recent");
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
 
-  const toggleSelection = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
+  const modelCatalog = useMemo(() => getModelHubCards(), []);
+  const modelMetaMap = useMemo(
+    () => new Map(modelCatalog.map((m) => [m.id, m])),
+    [modelCatalog]
+  );
 
-  const savePreset = () => {
-    if (!presetName.trim() || selectedModels.length === 0) return;
-    const preset: LabPreset = {
-      id: typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now()),
-      name: presetName.trim(),
-      models: selectedModels.map((model) => model.id),
-      subject: presetSubject,
-      createdAt: new Date().toISOString(),
+  // Load assets
+  useEffect(() => {
+    const presets = loadLabPresets();
+    setAssets(presetsToAssets(presets));
+
+    const handler = () => {
+      const updatedPresets = loadLabPresets();
+      setAssets(presetsToAssets(updatedPresets));
     };
-    const nextPresets = upsertLabPreset(preset);
-    setPresets(nextPresets);
-    setPresetName("");
-  };
+    window.addEventListener("lab-presets-updated", handler);
+    return () => window.removeEventListener("lab-presets-updated", handler);
+  }, []);
 
-  const handleUsePreset = (preset: LabPreset) => {
-    setSelectedIds(new Set(preset.models));
-  };
+  // Filter and sort assets
+  const filteredAssets = useMemo(() => {
+    let result = [...assets];
 
-  const handleDeletePreset = (id: string) => {
-    const nextPresets = removeLabPreset(id);
-    setPresets(nextPresets);
-  };
+    // Search
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(
+        (asset) =>
+          asset.name.toLowerCase().includes(query) ||
+          asset.description?.toLowerCase().includes(query) ||
+          asset.tags.some((t) => t.toLowerCase().includes(query))
+      );
+    }
 
-  const upsertExperiment = (updates: Partial<LabExperiment>) => {
-    if (!currentExperimentId) return;
-    const existing =
-      experiments.find((entry) => entry.id === currentExperimentId) ??
-      ({
-        id: currentExperimentId,
-        question,
-        models: selectedModels.map((model) => model.id),
-        createdAt: new Date().toISOString(),
-      } as LabExperiment);
-    const next = upsertLabExperiment({
-      ...existing,
-      ...updates,
-    });
-    setExperiments(next);
-  };
+    // Scope filter
+    if (scopeFilter !== "all") {
+      result = result.filter((asset) => asset.scope === scopeFilter);
+    }
 
-  const handleVote = (modelId: string) => {
-    setBestModel(modelId);
-    upsertExperiment({ bestModel: modelId });
-  };
+    // Type filter
+    if (typeFilter !== "all") {
+      result = result.filter((asset) => asset.type === typeFilter);
+    }
 
-  const handleNoteChange = (modelId: string, value: string) => {
-    setModelNotes((prev) => {
-      const next = { ...prev, [modelId]: value };
-      upsertExperiment({ notes: next });
-      return next;
-    });
-  };
-
-  const runConsensus = async (
-    questionText: string,
-    answers: CompareResult[],
-    nextAttachments: PdfAttachment[]
-  ) => {
-    if (!autoConsensus || answers.length === 0) return;
-    const response = await fetch("/api/consensus", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: questionText,
-        answers: answers.map((answer) => ({
-          model: answer.usedModel ?? answer.model,
-          final: answer.final,
-        })),
-        aggregatorModel: aggregatorModel === "auto" ? undefined : aggregatorModel,
-        attachments: nextAttachments,
-      }),
-    });
-    if (!response.ok) return;
-    const payload = (await response.json()) as ConsensusResult;
-    setConsensus(payload);
-  };
-
-  const runExperiment = async () => {
-    if (!question.trim() || selectedModels.length < 2) return;
-    setStatus("loading");
-    setResults([]);
-    setConsensus(null);
-    setBestModel(null);
-    setModelNotes({});
-
-    const experimentId =
-      typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now());
-    setCurrentExperimentId(experimentId);
-    const initialExperiment: LabExperiment = {
-      id: experimentId,
-      question: question.trim(),
-      models: selectedModels.map((model) => model.id),
-      createdAt: new Date().toISOString(),
-    };
-    setExperiments(upsertLabExperiment(initialExperiment));
-
-    try {
-      const response = await fetch("/api/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: question.trim(),
-          models: selectedModels.map((model) => model.id),
-          mode,
-          attachments,
-        }),
-      });
-      if (!response.ok || !response.body) throw new Error("Compare failed");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const order = selectedModels.map((model) => model.id);
-      const nextResults: CompareResult[] = [];
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          const event = JSON.parse(trimmed) as { type: string; payload?: any };
-          if (event.type === "result" && event.payload) {
-            const payload = event.payload as CompareResult;
-            const existingIndex = nextResults.findIndex((item) => item.model === payload.model);
-            if (existingIndex >= 0) {
-              nextResults[existingIndex] = payload;
-            } else {
-              nextResults.push(payload);
-            }
-            const ordered = [...nextResults].sort(
-              (a, b) => order.indexOf(a.model) - order.indexOf(b.model)
-            );
-            setResults(ordered);
-          }
-        }
+    // Sort
+    result.sort((a, b) => {
+      if (sortBy === "recent") {
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       }
-
-      setStatus("idle");
-      await runConsensus(question.trim(), nextResults, attachments);
-      setAttachments([]);
-    } catch {
-      setStatus("error");
-    }
-  };
-
-  const handleAttachFiles = async (files: FileList | null) => {
-    if (!files) return;
-    const next: PdfAttachment[] = [];
-    for (const file of Array.from(files)) {
-      if (!isPdfFile(file)) continue;
-      try {
-        const attachment = await fileToAttachment(file);
-        next.push(attachment);
-      } catch {
-        // ignore
+      if (sortBy === "usage") {
+        return b.usageCount - a.usageCount;
       }
+      return (b.rating || 0) - (a.rating || 0);
+    });
+
+    return result;
+  }, [assets, searchQuery, scopeFilter, typeFilter, sortBy]);
+
+  const handleDeletePreset = useCallback((id: string) => {
+    removeLabPreset(id);
+    setAssets((prev) => prev.filter((a) => a.id !== id));
+    if (selectedAsset?.id === id) {
+      setSelectedAsset(null);
     }
-    if (next.length > 0) {
-      setAttachments((prev) => [...prev, ...next]);
-    }
+  }, [selectedAsset]);
+
+  const handleUsePreset = useCallback(
+    (asset: Asset) => {
+      if (asset.models && asset.models.length > 0) {
+        router.push(`/studio?stack=${asset.models.join(",")}`);
+      }
+    },
+    [router]
+  );
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
   };
+
+  const assetCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: assets.length };
+    assets.forEach((asset) => {
+      counts[asset.type] = (counts[asset.type] || 0) + 1;
+      counts[asset.scope] = (counts[asset.scope] || 0) + 1;
+    });
+    return counts;
+  }, [assets]);
 
   return (
-    <YStack flex={1} backgroundColor="$background" minHeight="100vh">
+    <YStack flex={1} backgroundColor={colors.bg} minHeight="100vh">
       <Header />
 
-      <YStack flex={1} padding="$xl" maxWidth={1200} marginHorizontal="auto" width="100%">
-        <H1 fontSize={32} fontWeight="700" color="$color" marginBottom="$sm">
-          Laboratory
-        </H1>
-        <Paragraph color="$textMuted" fontSize={16} maxWidth={720} marginBottom="$lg">
-          Pair and compare multiple models, save stacks, and experiment with consensus answers.
-        </Paragraph>
+      <YStack flex={1} maxWidth={1600} width="100%" marginHorizontal="auto">
+        {/* Early Alpha Banner */}
+        <XStack
+          padding="$md"
+          backgroundColor={isDark ? "rgba(245, 158, 11, 0.15)" : "rgba(245, 158, 11, 0.1)"}
+          borderBottomWidth={1}
+          borderColor={isDark ? "rgba(245, 158, 11, 0.3)" : "rgba(245, 158, 11, 0.2)"}
+          alignItems="center"
+          gap="$md"
+          justifyContent="center"
+        >
+          <Beaker size={18} color={colors.gold} />
+          <Text fontSize={14} color={colors.gold}>
+            Early Alpha Preview — Features may change rapidly. This is where we test advanced capabilities before moving them into Studio.
+          </Text>
+        </XStack>
 
-        <YStack gap="$lg">
+        <XStack flex={1}>
+          {/* Left Sidebar - Navigation */}
           <YStack
-            borderWidth={1}
-            borderColor="$border"
-            borderRadius="$md"
-            padding="$md"
-            backgroundColor="$background"
+            width={280}
+            minWidth={280}
+            padding="$lg"
+            gap="$lg"
+            borderRightWidth={1}
+            borderColor={colors.border}
+            backgroundColor={colors.bgSecondary}
           >
-            <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-              Model pairing ({selectedModels.length} selected)
-            </Text>
-            <input
-              value={modelSearch}
-              onChange={(event) => setModelSearch(event.target.value)}
-              placeholder="Search models..."
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #e5e5e5",
-                background: "#fff",
-                color: "#111",
-                fontSize: 12,
-                marginBottom: 10,
-              }}
-            />
-            <XStack gap="$sm" flexWrap="wrap">
-              {filteredModels.map((model) => {
-                const isSelected = selectedIds.has(model.id);
-                return (
-                  <Button
-                    key={model.id}
-                    size="$2"
-                    borderWidth={1}
-                    borderColor="$border"
-                    backgroundColor={isSelected ? "$color" : "transparent"}
-                    color={isSelected ? "$background" : "$color"}
-                    borderRadius="$full"
-                    onPress={() => toggleSelection(model.id)}
-                  >
-                    {model.name}
-                  </Button>
-                );
-              })}
-            </XStack>
-            {filteredModels.length === 0 && (
-              <YStack marginTop="$sm" gap="$xs">
-                <Text fontSize={12} color="$textMuted">
-                  No models match that search.
-                </Text>
-                <Button
-                  size="$2"
-                  backgroundColor="transparent"
+            {/* Header */}
+            <YStack gap="$xs">
+              <H1 fontSize={28} fontWeight="700" color={colors.text}>
+                Laboratory
+              </H1>
+              <Paragraph color={colors.textMuted} fontSize={14}>
+                Nexus's experimental workspace for building, testing, and managing AI assets.
+              </Paragraph>
+            </YStack>
+
+            {/* Create Button */}
+            <YStack position="relative">
+              <Button
+                size="$4"
+                backgroundColor={colors.accent}
+                color="black"
+                borderRadius="$md"
+                fontWeight="600"
+                onPress={() => setShowCreateMenu(!showCreateMenu)}
+                icon={<Plus size={18} />}
+              >
+                Create New
+              </Button>
+
+              {showCreateMenu && (
+                <YStack
+                  position="absolute"
+                  top="$lg"
+                  left={0}
+                  right={0}
+                  zIndex={50}
+                  backgroundColor={colors.bg}
                   borderWidth={1}
-                  borderColor="$border"
-                  color="$color"
-                  borderRadius="$sm"
-                  onPress={() => setModelSearch("")}
+                  borderColor={colors.border}
+                  borderRadius="$md"
+                  padding="$sm"
+                  gap="$xs"
                 >
-                  Clear search
-                </Button>
+                  {[
+                    { type: "agent", label: "AI Agent", icon: Sparkles },
+                    { type: "workflow", label: "Workflow", icon: Workflow },
+                    { type: "pipeline", label: "Pipeline", icon: Layers },
+                    { type: "dataset", label: "Dataset", icon: Database },
+                    { type: "file", label: "Upload Files", icon: Upload },
+                  ].map(({ type, label, icon: Icon }) => (
+                    <Button
+                      key={type}
+                      size="$3"
+                      backgroundColor="transparent"
+                      color={colors.text}
+                      justifyContent="flex-start"
+                      icon={<Icon size={16} color={assetTypeColors[type as AssetType]} />}
+                      onPress={() => {
+                        setShowCreateMenu(false);
+                        // TODO: Navigate to creation flow
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </YStack>
+              )}
+            </YStack>
+
+            {/* Scope Filter */}
+            <YStack gap="$sm">
+              <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                Scope
+              </Text>
+              <YStack gap="$xs">
+                {[
+                  { key: "all", label: "All Assets", count: assetCounts.all },
+                  { key: "private", label: "Private", count: assetCounts.private || 0, icon: Lock },
+                  { key: "organization", label: "Organization", count: assetCounts.organization || 0, icon: Users },
+                ].map(({ key, label, count, icon: Icon }) => (
+                  <Button
+                    key={key}
+                    size="$3"
+                    backgroundColor={scopeFilter === key ? colors.bgTertiary : "transparent"}
+                    borderWidth={1}
+                    borderColor={scopeFilter === key ? colors.border : "transparent"}
+                    color={colors.text}
+                    justifyContent="space-between"
+                    onPress={() => setScopeFilter(key as any)}
+                    icon={Icon ? <Icon size={14} /> : undefined}
+                  >
+                    <XStack justifyContent="space-between" width="100%">
+                      <Text fontSize={13} color={colors.text}>
+                        {label}
+                      </Text>
+                      <Text fontSize={12} color={colors.textMuted}>
+                        {count}
+                      </Text>
+                    </XStack>
+                  </Button>
+                ))}
               </YStack>
-            )}
+            </YStack>
+
+            {/* Asset Types */}
+            <YStack gap="$sm">
+              <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                Asset Types
+              </Text>
+              <YStack gap="$xs">
+                {[
+                  { type: "model", label: "Models", icon: Bot },
+                  { type: "agent", label: "Agents", icon: Sparkles },
+                  { type: "workflow", label: "Workflows", icon: Workflow },
+                  { type: "pipeline", label: "Pipelines", icon: Layers },
+                  { type: "dataset", label: "Datasets", icon: Database },
+                  { type: "file", label: "Files", icon: FileText },
+                ].map(({ type, label, icon: Icon }) => (
+                  <Button
+                    key={type}
+                    size="$3"
+                    backgroundColor={typeFilter === type ? colors.bgTertiary : "transparent"}
+                    borderWidth={1}
+                    borderColor={typeFilter === type ? colors.border : "transparent"}
+                    color={colors.text}
+                    justifyContent="flex-start"
+                    onPress={() => setTypeFilter(typeFilter === type ? "all" : (type as AssetType))}
+                    icon={<Icon size={14} color={assetTypeColors[type as AssetType]} />}
+                  >
+                    <XStack justifyContent="space-between" width="100%">
+                      <Text fontSize={13} color={colors.text}>
+                        {label}
+                      </Text>
+                      <Text fontSize={12} color={colors.textMuted}>
+                        {assetCounts[type] || 0}
+                      </Text>
+                    </XStack>
+                  </Button>
+                ))}
+              </YStack>
+            </YStack>
+
+            {/* Complexity Filter */}
+            <YStack gap="$sm">
+              <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                Complexity
+              </Text>
+              <YStack gap="$xs">
+                {["simple", "moderate", "advanced", "enterprise"].map((level) => (
+                  <Text
+                    key={level}
+                    fontSize={12}
+                    color={colors.textSecondary}
+                    textTransform="capitalize"
+                    padding="$xs"
+                    backgroundColor={colors.bgTertiary}
+                    borderRadius="$sm"
+                  >
+                    {level}
+                  </Text>
+                ))}
+              </YStack>
+            </YStack>
           </YStack>
 
-          <XStack gap="$lg" flexWrap="wrap">
-            <YStack flex={2} minWidth={320}>
-              <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$sm"
-                backgroundColor="$background"
-              >
-                <TextArea
-                  value={question}
-                  onChangeText={setQuestion}
-                  placeholder="Ask a question to test your stack..."
-                  minHeight={90}
-                  borderColor="transparent"
+          {/* Main Content - Asset Gallery */}
+          <YStack flex={1} padding="$lg" gap="$lg">
+            {/* Toolbar */}
+            <XStack justifyContent="space-between" alignItems="center" gap="$md">
+              <XStack flex={1} maxWidth={400} alignItems="center" gap="$xs" paddingHorizontal="$md" paddingVertical="$sm" backgroundColor={colors.bgSecondary} borderRadius="$md" borderWidth={1} borderColor={colors.border}>
+                <Search size={18} color={colors.textMuted} />
+                <Input
+                  flex={1}
                   backgroundColor="transparent"
-                  fontSize={15}
-                  padding="$sm"
+                  borderWidth={0}
+                  color={colors.text}
+                  placeholder="Search assets..."
+                  placeholderTextColor={colors.textSecondary}
+                  fontSize={14}
+                  padding="$xs"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
                 />
-                {attachments.length > 0 && (
-                  <XStack flexWrap="wrap" gap="$xs" paddingHorizontal="$xs" marginBottom="$xs">
-                    {attachments.map((attachment, index) => (
-                      <XStack
-                        key={`${attachment.name}-${index}`}
-                        alignItems="center"
-                        gap="$xs"
-                        borderWidth={1}
-                        borderColor="$border"
-                        borderRadius="$full"
-                        paddingHorizontal="$sm"
-                        paddingVertical="$xs"
-                        backgroundColor="$backgroundSecondary"
-                      >
-                        <Text fontSize={11} color="$textMuted">
-                          {attachment.name}
-                        </Text>
-                        <Button
-                          size="$1"
-                          backgroundColor="transparent"
-                          borderWidth={0}
-                          color="$textMuted"
-                          onPress={() =>
-                            setAttachments((prev) =>
-                              prev.filter((_, itemIndex) => itemIndex !== index)
-                            )
-                          }
-                        >
-                          <X size={12} />
-                        </Button>
-                      </XStack>
-                    ))}
-                  </XStack>
+                {searchQuery && (
+                  <Button
+                    size="$1"
+                    backgroundColor="transparent"
+                    borderWidth={0}
+                    onPress={() => setSearchQuery("")}
+                    icon={<X size={16} color={colors.textMuted} />}
+                  />
                 )}
-                <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$sm">
+              </XStack>
+
+              <XStack gap="$sm" alignItems="center">
+                {/* Sort Toggle */}
+                <XStack borderWidth={1} borderColor={colors.border} borderRadius="$md" overflow="hidden">
+                  {[
+                    { value: "recent", label: "Most Recent" },
+                    { value: "usage", label: "Most Used" },
+                    { value: "rating", label: "Highest Rated" },
+                  ].map((option) => {
+                    const isActive = sortBy === option.value;
+                    return (
+                      <Button
+                        key={option.value}
+                        size="$2"
+                        backgroundColor={isActive ? colors.bgTertiary : "transparent"}
+                        color={isActive ? colors.text : colors.textMuted}
+                        borderWidth={0}
+                        borderRadius={0}
+                        onPress={() => setSortBy(option.value as any)}
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </XStack>
+
+                {/* View Toggle */}
+                <XStack borderWidth={1} borderColor={colors.border} borderRadius="$md" overflow="hidden">
+                  <Button
+                    size="$2"
+                    backgroundColor={viewMode === "grid" ? colors.bgTertiary : "transparent"}
+                    borderWidth={0}
+                    borderRadius={0}
+                    onPress={() => setViewMode("grid")}
+                    icon={<Grid3X3 size={16} color={viewMode === "grid" ? colors.text : colors.textMuted} />}
+                  />
+                  <Button
+                    size="$2"
+                    backgroundColor={viewMode === "list" ? colors.bgTertiary : "transparent"}
+                    borderWidth={0}
+                    borderRadius={0}
+                    onPress={() => setViewMode("list")}
+                    icon={<List size={16} color={viewMode === "list" ? colors.text : colors.textMuted} />}
+                  />
+                </XStack>
+              </XStack>
+            </XStack>
+
+            {/* Assets Grid/List */}
+            {filteredAssets.length === 0 ? (
+              <YStack flex={1} alignItems="center" justifyContent="center" gap="$lg">
+                <YStack
+                  width={120}
+                  height={120}
+                  backgroundColor={colors.bgTertiary}
+                  borderRadius="$lg"
+                  alignItems="center"
+                  justifyContent="center"
+                >
+                  <Beaker size={48} color={colors.border} />
+                </YStack>
+                <YStack alignItems="center" gap="$sm" maxWidth={400}>
+                  <H2 fontSize={20} fontWeight="600" color={colors.text}>
+                    {assets.length === 0 ? "Your Laboratory is empty" : "No assets match your filters"}
+                  </H2>
+                  <Paragraph color={colors.textMuted} textAlign="center">
+                    {assets.length === 0
+                      ? "Start by creating AI assets, uploading files, or saving model presets from the Model Hub."
+                      : "Try adjusting your search or filters to find what you're looking for."}
+                  </Paragraph>
+                </YStack>
+                {assets.length === 0 && (
                   <XStack gap="$sm">
                     <Button
                       size="$3"
-                      backgroundColor={mode === "fast" ? "$color" : "transparent"}
-                      color={mode === "fast" ? "$background" : "$color"}
-                      borderWidth={1}
-                      borderColor="$border"
-                      borderRadius="$sm"
-                      onPress={() => setMode("fast")}
+                      backgroundColor={colors.accent}
+                      color="black"
+                      onPress={() => router.push("/models")}
+                      icon={<Bot size={16} />}
                     >
-                      Fast
+                      Browse Models
                     </Button>
                     <Button
                       size="$3"
-                      backgroundColor={mode === "deep" ? "$color" : "transparent"}
-                      color={mode === "deep" ? "$background" : "$color"}
+                      backgroundColor={colors.bgTertiary}
+                      color={colors.text}
                       borderWidth={1}
-                      borderColor="$border"
-                      borderRadius="$sm"
-                      onPress={() => setMode("deep")}
+                      borderColor={colors.border}
+                      icon={<Upload size={16} />}
                     >
-                      Deep
+                      Upload Files
                     </Button>
                   </XStack>
-                  <XStack gap="$sm" alignItems="center">
-                    <Button
-                      size="$3"
-                      backgroundColor="$color"
-                      color="$background"
-                      borderRadius="$sm"
-                      onPress={runExperiment}
-                      disabled={status === "loading" || selectedModels.length < 2}
-                    >
-                      {status === "loading" ? "Running..." : "Run experiment"}
-                    </Button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="application/pdf"
-                      multiple
-                      onChange={(event) => {
-                        void handleAttachFiles(event.target.files);
-                        event.currentTarget.value = "";
-                      }}
-                      style={{ display: "none" }}
-                    />
-                    <Button
-                      size="$3"
-                      backgroundColor="transparent"
-                      borderWidth={1}
-                      borderColor="$border"
-                      color="$color"
-                      borderRadius="$sm"
-                      icon={<Paperclip size={14} color="#9CA3AF" />}
-                      onPress={() => fileInputRef.current?.click()}
-                    >
-                      Upload PDF
-                    </Button>
-                  </XStack>
-                </XStack>
+                )}
               </YStack>
-            </YStack>
-
-            <YStack flex={1} minWidth={260} gap="$sm">
+            ) : (
               <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$md"
-                backgroundColor="$background"
+                {...(viewMode === "grid"
+                  ? {
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: "$md",
+                    }
+                  : {
+                      gap: "$sm",
+                    })}
               >
-                <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                  Auto-consensus
-                </Text>
-                <XStack alignItems="center" gap="$sm" marginBottom="$sm">
-                  <Button
-                    size="$2"
-                    backgroundColor={autoConsensus ? "$color" : "transparent"}
-                    color={autoConsensus ? "$background" : "$color"}
-                    borderWidth={1}
-                    borderColor="$border"
-                    borderRadius="$sm"
-                    onPress={() => setAutoConsensus((prev) => !prev)}
-                  >
-                    {autoConsensus ? "Enabled" : "Disabled"}
-                  </Button>
-                </XStack>
-                <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                  Aggregator model
-                </Text>
-                <AgentPicker
-                  value={aggregatorModel}
-                  onChange={setAggregatorModel}
-                  models={modelCatalog}
-                />
-              </YStack>
+                {filteredAssets.map((asset) => {
+                  const Icon = assetTypeIcons[asset.type];
+                  const isSelected = selectedAsset?.id === asset.id;
 
-              <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$md"
-                backgroundColor="$background"
-              >
-                <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                  Save model stack
-                </Text>
-                <TextArea
-                  value={presetName}
-                  onChangeText={setPresetName}
-                  placeholder="Preset name..."
-                  minHeight={40}
-                  borderColor="transparent"
-                  backgroundColor="transparent"
-                  fontSize={14}
-                  padding="$xs"
-                />
-                <select
-                  value={presetSubject}
-                  onChange={(event) => setPresetSubject(event.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #e5e5e5",
-                    background: "#fff",
-                    color: "#111",
-                    fontSize: 12,
-                    marginTop: 8,
-                  }}
-                >
-                  {subjects.map((subject) => (
-                    <option key={subject} value={subject}>
-                      {subject}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  marginTop="$sm"
-                  onPress={savePreset}
-                  disabled={!presetName.trim() || selectedModels.length === 0}
-                >
-                  Save stack
-                </Button>
-              </YStack>
-            </YStack>
-          </XStack>
+                  if (viewMode === "list") {
+                    return (
+                      <XStack
+                        key={asset.id}
+                        padding="$md"
+                        backgroundColor={isSelected ? colors.bgTertiary : colors.bgSecondary}
+                        borderWidth={1}
+                        borderColor={isSelected ? colors.accent : colors.border}
+                        borderRadius="$md"
+                        alignItems="center"
+                        gap="$md"
+                        hoverStyle={{ backgroundColor: colors.bgTertiary }}
+                        onPress={() => setSelectedAsset(asset)}
+                      >
+                        <YStack
+                          width={40}
+                          height={40}
+                          backgroundColor={isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}
+                          borderRadius="$md"
+                          alignItems="center"
+                          justifyContent="center"
+                        >
+                          <Icon size={20} color={assetTypeColors[asset.type]} />
+                        </YStack>
 
-          {results.length > 0 && (
-            <YStack gap="$sm">
-              <Text fontSize={12} color="$textMuted">
-                Parallel output view
-              </Text>
-              <XStack gap="$lg" flexWrap="wrap">
-                {results.map((result) => (
-                  <YStack
-                    key={`lab-result-${result.model}`}
-                    flex={1}
-                    minWidth={280}
-                    borderWidth={1}
-                    borderColor="$border"
-                    borderRadius="$md"
-                    padding="$lg"
-                  >
-                    <Text fontSize={14} fontWeight="600" color="$color" marginBottom="$xs">
-                      {modelNameMap.get(result.model) ?? result.model}
-                    </Text>
-                    <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                      Used: {modelNameMap.get(result.usedModel) ?? result.usedModel}
-                    </Text>
-                    <Text fontSize={13} color="$color" marginBottom="$sm">
-                      {result.final}
-                    </Text>
-                    <YStack gap="$xs" marginBottom="$sm">
-                      {result.steps.map((step, index) => (
-                        <XStack key={`${result.model}-step-${index}`} gap="$sm" alignItems="flex-start">
-                          <Text fontSize={12} color="$textMuted">
-                            {index + 1}.
+                        <YStack flex={1}>
+                          <Text fontSize={15} fontWeight="600" color={colors.text}>
+                            {asset.name}
                           </Text>
-                          <Text fontSize={13} color="$color">
-                            {step}
+                          <Text fontSize={12} color={colors.textMuted}>
+                            {asset.description}
+                          </Text>
+                        </YStack>
+
+                        <XStack gap="$xs" alignItems="center">
+                          {asset.models?.slice(0, 3).map((modelId) => (
+                            <Text key={modelId} fontSize={12} color={colors.textSecondary}>
+                              {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                            </Text>
+                          ))}
+                          {asset.models && asset.models.length > 3 && (
+                            <Text fontSize={11} color={colors.textMuted}>
+                              +{asset.models.length - 3}
+                            </Text>
+                          )}
+                        </XStack>
+
+                        <XStack gap="$sm" alignItems="center">
+                          {asset.scope === "private" ? (
+                            <Lock size={14} color={colors.textMuted} />
+                          ) : (
+                            <Users size={14} color={colors.textMuted} />
+                          )}
+                          <Text fontSize={12} color={colors.textMuted}>
+                            {formatDate(asset.createdAt)}
                           </Text>
                         </XStack>
-                      ))}
-                    </YStack>
-                    <XStack justifyContent="space-between" flexWrap="wrap" marginBottom="$sm">
-                      <Text fontSize={12} color="$textMuted">
-                        Confidence: {(result.confidence * 100).toFixed(0)}%
-                      </Text>
-                      <Text fontSize={12} color="$textMuted">
-                        Latency: {Math.round(result.durationMs)} ms
-                      </Text>
-                    </XStack>
-                    <Button
-                      size="$2"
-                      backgroundColor={bestModel === result.model ? "$color" : "transparent"}
-                      color={bestModel === result.model ? "$background" : "$color"}
+
+                        <XStack gap="$xs">
+                          <Button
+                            size="$2"
+                            backgroundColor={colors.accent}
+                            color="black"
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleUsePreset(asset);
+                            }}
+                            icon={<Play size={14} />}
+                          >
+                            Use
+                          </Button>
+                          <Button
+                            size="$2"
+                            backgroundColor="transparent"
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            color={colors.text}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleDeletePreset(asset.id);
+                            }}
+                            icon={<Trash2 size={14} />}
+                          />
+                        </XStack>
+                      </XStack>
+                    );
+                  }
+
+                  // Grid view
+                  return (
+                    <YStack
+                      key={asset.id}
+                      width={280}
+                      padding="$md"
+                      backgroundColor={isSelected ? colors.bgTertiary : colors.bgSecondary}
                       borderWidth={1}
-                      borderColor="$border"
-                      borderRadius="$sm"
-                      onPress={() => handleVote(result.model)}
+                      borderColor={isSelected ? colors.accent : colors.border}
+                      borderRadius="$lg"
+                      gap="$md"
+                      hoverStyle={{ backgroundColor: colors.bgTertiary }}
+                      onPress={() => setSelectedAsset(asset)}
                     >
-                      {bestModel === result.model ? "Best answer" : "Mark best"}
-                    </Button>
-                    <TextArea
-                      value={modelNotes[result.model] ?? ""}
-                      onChangeText={(value) => handleNoteChange(result.model, value)}
-                      placeholder="Performance notes..."
-                      minHeight={50}
-                      borderColor="$border"
-                      backgroundColor="$backgroundSecondary"
-                      fontSize={12}
-                      padding="$xs"
-                      marginTop="$sm"
-                    />
-                  </YStack>
-                ))}
-              </XStack>
-            </YStack>
-          )}
+                      <XStack justifyContent="space-between" alignItems="flex-start">
+                        <YStack
+                          width={48}
+                          height={48}
+                          backgroundColor={isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}
+                          borderRadius="$lg"
+                          alignItems="center"
+                          justifyContent="center"
+                        >
+                          <Icon size={24} color={assetTypeColors[asset.type]} />
+                        </YStack>
+                        <XStack gap="$xs">
+                          {asset.scope === "private" ? (
+                            <Lock size={14} color={colors.textMuted} />
+                          ) : (
+                            <Users size={14} color={colors.textMuted} />
+                          )}
+                        </XStack>
+                      </XStack>
 
-          {consensus && (
-            <YStack
-              borderWidth={1}
-              borderColor="$border"
-              borderRadius="$md"
-              padding="$md"
-              backgroundColor="$backgroundSecondary"
-            >
-              <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                Auto-consensus result
-              </Text>
-              <Text fontSize={14} fontWeight="600" color="$color" marginBottom="$xs">
-                {consensus.final}
-              </Text>
-              <Text fontSize={12} color="$textMuted">
-                Model: {consensus.model}
-              </Text>
-              <Text fontSize={12} color="$textMuted">
-                Confidence: {(consensus.confidence * 100).toFixed(0)}%
-              </Text>
-            </YStack>
-          )}
+                      <YStack gap="$xs">
+                        <Text fontSize={16} fontWeight="600" color={colors.text}>
+                          {asset.name}
+                        </Text>
+                        <Text fontSize={13} color={colors.textMuted} numberOfLines={2}>
+                          {asset.description}
+                        </Text>
+                      </YStack>
 
-          <YStack gap="$sm">
-            <Text fontSize={12} color="$textMuted">
-              Saved presets
-            </Text>
-            {presets.length === 0 ? (
-              <Text fontSize={12} color="$textMuted">
-                No saved stacks yet.
-              </Text>
-            ) : (
-              <XStack gap="$sm" flexWrap="wrap">
-                {presets.map((preset) => (
-                  <YStack
-                    key={preset.id}
-                    borderWidth={1}
-                    borderColor="$border"
-                    borderRadius="$md"
-                    padding="$sm"
-                    minWidth={240}
-                  >
-                    <Text fontSize={14} fontWeight="600" color="$color">
-                      {preset.name}
-                    </Text>
-                    <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                      {preset.subject ?? "General"}
-                    </Text>
-                    <Text fontSize={12} color="$textMuted" marginBottom="$sm">
-                      {preset.models.map((model) => modelNameMap.get(model) ?? model).join(", ")}
-                    </Text>
-                    <XStack gap="$sm">
-                      <Button
-                        size="$2"
-                        borderWidth={1}
-                        borderColor="$border"
-                        backgroundColor="transparent"
-                        color="$color"
-                        borderRadius="$sm"
-                        onPress={() => handleUsePreset(preset)}
-                      >
-                        Use
-                      </Button>
-                      <Button
-                        size="$2"
-                        borderWidth={1}
-                        borderColor="$border"
-                        backgroundColor="transparent"
-                        color="$color"
-                        borderRadius="$sm"
-                        onPress={() => handleDeletePreset(preset.id)}
-                      >
-                        Delete
-                      </Button>
-                    </XStack>
-                  </YStack>
-                ))}
-              </XStack>
-            )}
-          </YStack>
+                      <XStack flexWrap="wrap" gap="$xs">
+                        {asset.tags.map((tag) => (
+                          <Text
+                            key={tag}
+                            fontSize={11}
+                            color={colors.textSecondary}
+                            backgroundColor={colors.bgTertiary}
+                            paddingHorizontal="$xs"
+                            paddingVertical={4}
+                            borderRadius="$sm"
+                          >
+                            {tag}
+                          </Text>
+                        ))}
+                      </XStack>
 
-          <YStack gap="$sm">
-            <Text fontSize={12} color="$textMuted">
-              Experiment history
-            </Text>
-            {experiments.length === 0 ? (
-              <Text fontSize={12} color="$textMuted">
-                No experiments yet.
-              </Text>
-            ) : (
-              <YStack gap="$xs">
-                {experiments.slice(0, 6).map((experiment) => (
-                  <YStack
-                    key={experiment.id}
-                    borderWidth={1}
-                    borderColor="$border"
-                    borderRadius="$md"
-                    padding="$sm"
-                  >
-                    <Text fontSize={13} color="$color" marginBottom="$xs">
-                      {experiment.question}
-                    </Text>
-                    <Text fontSize={12} color="$textMuted">
-                      Models: {experiment.models.map((model) => modelNameMap.get(model) ?? model).join(", ")}
-                    </Text>
-                    {experiment.bestModel && (
-                      <Text fontSize={12} color="$textMuted">
-                        Best: {modelNameMap.get(experiment.bestModel) ?? experiment.bestModel}
-                      </Text>
-                    )}
-                  </YStack>
-                ))}
+                      {asset.models && asset.models.length > 0 && (
+                        <XStack alignItems="center" gap="$xs">
+                          <Text fontSize={11} color={colors.textMuted}>
+                            Models:
+                          </Text>
+                          {asset.models.slice(0, 4).map((modelId) => (
+                            <Text key={modelId} fontSize={12} color={colors.textSecondary}>
+                              {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                            </Text>
+                          ))}
+                          {asset.models.length > 4 && (
+                            <Text fontSize={11} color={colors.textMuted}>
+                              +{asset.models.length - 4}
+                            </Text>
+                          )}
+                        </XStack>
+                      )}
+
+                      <XStack justifyContent="space-between" alignItems="center" marginTop="$xs">
+                        <Text fontSize={12} color={colors.textMuted}>
+                          {formatDate(asset.createdAt)}
+                        </Text>
+                        <XStack gap="$xs">
+                          <Button
+                            size="$2"
+                            backgroundColor={colors.accent}
+                            color="black"
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleUsePreset(asset);
+                            }}
+                            icon={<Play size={14} />}
+                          >
+                            Use
+                          </Button>
+                          <Button
+                            size="$2"
+                            backgroundColor="transparent"
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            color={colors.text}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleDeletePreset(asset.id);
+                            }}
+                            icon={<Trash2 size={14} />}
+                          />
+                        </XStack>
+                      </XStack>
+                    </YStack>
+                  );
+                })}
               </YStack>
             )}
           </YStack>
-        </YStack>
+        </XStack>
       </YStack>
     </YStack>
   );

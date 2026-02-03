@@ -69,15 +69,19 @@ export default function CompareOverlay({
     .filter(Boolean);
 
   return (
-    <YStack
-      position="fixed"
-      top={0}
-      left={0}
-      right={0}
-      bottom={0}
-      zIndex={200}
-      backgroundColor="rgba(6, 7, 9, 0.92)"
-      padding="$xl"
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 200,
+        backgroundColor: "rgba(6, 7, 9, 0.92)",
+        padding: 32,
+        display: "flex",
+        flexDirection: "column",
+      }}
     >
       <YStack
         flex={1}
@@ -209,6 +213,6 @@ export default function CompareOverlay({
           </XStack>
         )}
       </YStack>
-    </YStack>
+    </div>
   );
 }

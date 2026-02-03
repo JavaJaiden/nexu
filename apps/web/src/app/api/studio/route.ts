@@ -89,7 +89,7 @@ export async function POST(req: Request) {
 
   const { messages, mode, preferredModel, preferredModels, aggregatorModel, attachments } =
     (await req.json()) as {
-      messages: Array<{ role: string; content: string }>;
+      messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
       mode?: "fast" | "deep";
       preferredModel?: string;
       preferredModels?: string[];

@@ -1,1513 +1,1765 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Button,
+  H1,
+  Input,
+  Paragraph,
+  Text,
+  XStack,
+  YStack,
+  ScrollView,
+  Theme,
+} from "tamagui";
+import {
+  ArrowUpDown,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  Layers,
+  Search,
+  X,
+  Trophy,
+  Zap,
+  Brain,
+  Code2,
+  Calculator,
+  Sparkles,
+  Info,
+  DollarSign,
+  Gauge,
+  Clock,
+  TrendingUp,
+  MessageSquare,
+  Bot,
+  Send,
+  ChevronUp,
+  BarChart3,
+  Award,
+  Sun,
+  Moon,
+} from "lucide-react";
 import Header from "@/components/Header";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, H1, Paragraph, Text, TextArea, XStack, YStack } from "tamagui";
-import { X } from "lucide-react";
-import { loadHistory, upsertHistoryEntry, type HistoryEntry } from "@/lib/historyStore";
-import { getModelHubCards } from "@/lib/modelCatalog";
-import { useRouter } from "next/navigation";
+import { loadHistory, type HistoryEntry } from "@/lib/historyStore";
+import { getModelHubCards, getProviderIcon, type ModelCard } from "@/lib/modelCatalog";
+import type { LeaderboardModel } from "@/lib/leaderboard";
+import { useThemeSetting } from "@/lib/themeContext";
+import { loadLabPresets, upsertLabPreset, type LabPreset } from "@/lib/labStore";
 
-export default function ModelsPage() {
-  const allModels = useMemo(() => {
-    return getModelHubCards();
-  }, []);
+// ============================================================================
+// TYPES
+// ============================================================================
 
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [activeModelId, setActiveModelId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [compareMode, setCompareMode] = useState(false);
-  const [showComparison, setShowComparison] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
-  const [discoveryInput, setDiscoveryInput] = useState("");
-  const [discoveryMessages, setDiscoveryMessages] = useState<
-    Array<{
-      id: string;
-      role: "user" | "assistant";
-      content: string;
-      recommendations?: Array<{ id: string; reason: string }>;
-    }>
-  >([]);
-  const [discoveryFilterIds, setDiscoveryFilterIds] = useState<Set<string> | null>(null);
-  const [compareBanner, setCompareBanner] = useState<string | null>(null);
-  const [compareQuestion, setCompareQuestion] = useState("");
-  const [compareStatus, setCompareStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [responseSettings, setResponseSettings] = useState({
-    streaming: true,
-    temperature: 0.6,
-    maxTokens: 800,
-  });
-  const [maxSameModel] = useState(5);
-  const [compareResults, setCompareResults] = useState<
-    Array<{
-      model: string;
-      usedModel: string;
-      final: string;
-      steps: string[];
-      confidence: number;
-      durationMs: number;
-      gatewayNote?: string;
-      selectionReason?: string;
-    }>
-  >([]);
-  const [compareSessionId, setCompareSessionId] = useState<string | null>(null);
-  const compareSectionRef = useRef<HTMLDivElement | null>(null);
-  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
-  const [infoPanel, setInfoPanel] = useState<"rankings" | "instructor" | "difference" | null>(
-    null
-  );
-  const [isNarrow, setIsNarrow] = useState(false);
-  const detailPanelRef = useRef<HTMLDivElement | null>(null);
+type SortKey = "overall" | "coding" | "math" | "reasoning" | "price" | "name" | "speed";
+type SortDir = "asc" | "desc";
+type ChatMode = "compare" | "discover" | null;
+
+interface DetailedModelData {
+  id: string;
+  rank: number;
+  model: ModelCard;
+  leaderboard?: LeaderboardModel;
+  scores: {
+    overall: number;
+    coding: number;
+    math: number;
+    reasoning: number;
+    vision: number;
+    multilingual: number;
+    instructionFollowing: number;
+  };
+  pricing: {
+    input: number;
+    output: number;
+    tier: "free" | "budget" | "standard" | "premium" | "enterprise";
+  };
+  capabilities: string[];
+  benchmarks: {
+    name: string;
+    score: number;
+    percentile: number;
+  }[];
+  latency: {
+    avg: number;
+    p50: number;
+    p95: number;
+    p99: number;
+  };
+  throughput: {
+    tokensPerSecond: number;
+    requestsPerMinute: number;
+  };
+  contextWindow: number;
+  trainingCutoff: string;
+  releaseDate: string;
+  description: string;
+  strengths: string[];
+  weaknesses: string[];
+  useCases: string[];
+  isSelected?: boolean;
+}
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  recommendations?: Array<{ id: string; reason: string; confidence: number }>;
+}
+
+// ============================================================================
+// MOCK DATA SOURCES
+// ============================================================================
+
+const ENHANCED_MODEL_DATA: Record<string, Partial<DetailedModelData>> = {
+  "gpt-4o": {
+    scores: { overall: 96, coding: 94, math: 93, reasoning: 95, vision: 92, multilingual: 91, instructionFollowing: 95 },
+    pricing: { input: 2.5, output: 10, tier: "premium" },
+    benchmarks: [
+      { name: "MMLU", score: 88.7, percentile: 99 },
+      { name: "HumanEval", score: 90.2, percentile: 98 },
+      { name: "GSM8K", score: 92.9, percentile: 97 },
+      { name: "MATH", score: 76.6, percentile: 95 },
+    ],
+    latency: { avg: 320, p50: 280, p95: 580, p99: 850 },
+    throughput: { tokensPerSecond: 142, requestsPerMinute: 3000 },
+    contextWindow: 128000,
+    trainingCutoff: "2024-05",
+    releaseDate: "2024-05-13",
+    description: "OpenAI's flagship model with exceptional reasoning, coding, and vision capabilities. Excels at complex problem-solving and creative tasks.",
+    strengths: ["Advanced reasoning", "Code generation", "Vision understanding", "Long context"],
+    weaknesses: ["Higher cost", "Occasional overconfidence"],
+    useCases: ["Enterprise apps", "Code review", "Document analysis", "Creative writing"],
+  },
+  "claude-3-5-sonnet": {
+    scores: { overall: 95, coding: 93, math: 91, reasoning: 96, vision: 89, multilingual: 90, instructionFollowing: 94 },
+    pricing: { input: 3, output: 15, tier: "premium" },
+    benchmarks: [
+      { name: "MMLU", score: 88.5, percentile: 99 },
+      { name: "HumanEval", score: 92.0, percentile: 99 },
+      { name: "GSM8K", score: 95.0, percentile: 99 },
+      { name: "MATH", score: 71.1, percentile: 93 },
+    ],
+    latency: { avg: 450, p50: 380, p95: 720, p99: 1100 },
+    throughput: { tokensPerSecond: 98, requestsPerMinute: 2000 },
+    contextWindow: 200000,
+    trainingCutoff: "2024-04",
+    releaseDate: "2024-06-20",
+    description: "Anthropic's most capable model with nuanced reasoning and exceptional safety characteristics. Strong at analysis and writing.",
+    strengths: ["Long context window", "Safe outputs", "Creative writing", "Analysis"],
+    weaknesses: ["Slower response times", "Premium pricing"],
+    useCases: ["Research analysis", "Content creation", "Legal review", "Medical Q&A"],
+  },
+  "gemini-1.5-pro": {
+    scores: { overall: 94, coding: 88, math: 90, reasoning: 93, vision: 94, multilingual: 95, instructionFollowing: 92 },
+    pricing: { input: 1.25, output: 5, tier: "standard" },
+    benchmarks: [
+      { name: "MMLU", score: 81.9, percentile: 95 },
+      { name: "HumanEval", score: 84.1, percentile: 90 },
+      { name: "GSM8K", score: 90.8, percentile: 96 },
+      { name: "MATH", score: 58.4, percentile: 78 },
+    ],
+    latency: { avg: 280, p50: 240, p95: 480, p99: 720 },
+    throughput: { tokensPerSecond: 165, requestsPerMinute: 3600 },
+    contextWindow: 2000000,
+    trainingCutoff: "2024-05",
+    releaseDate: "2024-02-15",
+    description: "Google's flagship with industry-leading context window and strong multimodal capabilities. Excellent for document processing.",
+    strengths: ["Massive context window", "Multilingual", "Vision", "Fast inference"],
+    weaknesses: ["Math benchmarks lag", "Less creative"],
+    useCases: ["Document analysis", "Translation", "Video understanding", "Research"],
+  },
+  "llama-3.1-405b": {
+    scores: { overall: 92, coding: 89, math: 88, reasoning: 91, vision: 82, multilingual: 87, instructionFollowing: 90 },
+    pricing: { input: 0, output: 0, tier: "free" },
+    benchmarks: [
+      { name: "MMLU", score: 85.2, percentile: 97 },
+      { name: "HumanEval", score: 89.0, percentile: 96 },
+      { name: "GSM8K", score: 88.2, percentile: 94 },
+      { name: "MATH", score: 73.8, percentile: 89 },
+    ],
+    latency: { avg: 520, p50: 450, p95: 850, p99: 1200 },
+    throughput: { tokensPerSecond: 76, requestsPerMinute: 1500 },
+    contextWindow: 128000,
+    trainingCutoff: "2024-06",
+    releaseDate: "2024-07-23",
+    description: "Meta's largest open-weight model with impressive capabilities rivaling closed-source alternatives. Free to use.",
+    strengths: ["Open source", "Large parameter count", "Free access", "Strong coding"],
+    weaknesses: ["Slower inference", "Higher resource requirements"],
+    useCases: ["Research", "Self-hosted apps", "Fine-tuning", "Cost-sensitive workloads"],
+  },
+};
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function getCapabilities(model: ModelCard): string[] {
+  const tags = new Set<string>();
+  if (model.type === "Router") tags.add("routing");
+  if (model.useCases.some((useCase) => /code|debug/i.test(useCase))) tags.add("function-calling");
+  if (model.useCases.some((useCase) => /problem|homework|q&a/i.test(useCase))) tags.add("chat");
+  if (model.strengths.some((strength) => /code|debug/i.test(strength))) tags.add("tools");
+  tags.add("text-generation");
+  if (model.speed.toLowerCase() === "fast") tags.add("streaming");
+  return Array.from(tags);
+}
+
+function getCategoryScore(model: ModelCard, category: string): number {
+  const baseScores: Record<string, number> = {
+    coding: model.useCases.some((u) => /code|debug/i.test(u)) ? 92 : 78,
+    math: model.strengths.some((s) => /math|calculus/i.test(s)) ? 89 : 75,
+    reasoning: model.accuracy === "High" ? 88 : 76,
+    overall: model.accuracy === "High" && model.speed === "Fast" ? 90 : 80,
+  };
+  return baseScores[category] ?? 75;
+}
+
+function formatPrice(model: ModelCard): string {
+  const tier = model.costEfficiency.toLowerCase();
+  if (tier === "high") return "$";
+  if (tier === "low") return "$$$";
+  return "$$";
+}
+
+function getPriceTier(model: ModelCard): DetailedModelData["pricing"]["tier"] {
+  const tier = model.costEfficiency.toLowerCase();
+  if (tier === "high") return "budget";
+  if (tier === "low") return "premium";
+  return "standard";
+}
+
+function formatLatency(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatNumber(num: number): string {
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+  return num.toString();
+}
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
+function ModelHubContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { theme, setTheme } = useThemeSetting();
+  const isDark = theme === "dark";
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const update = () => setIsNarrow(window.innerWidth < 980);
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
+  // Data
+  const allModels = useMemo(() => getModelHubCards(), []);
+  const [leaderboardModels, setLeaderboardModels] = useState<LeaderboardModel[]>([]);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
 
-  useEffect(() => {
-    if (!activeModelId) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setActiveModelId(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeModelId]);
+  // UI State
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("overall");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [filterOpen, setFilterOpen] = useState<"providers" | "capabilities" | "price" | null>(null);
+  const [providerFilters, setProviderFilters] = useState<Set<string>>(new Set());
+  const [capabilityFilters, setCapabilityFilters] = useState<Set<string>>(new Set());
+  const [priceFilters, setPriceFilters] = useState<Set<string>>(new Set());
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<ChatMode>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  
+  // Preset save modal state
+  const [showSavePreset, setShowSavePreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetSubject, setPresetSubject] = useState("General");
+  const [labPresets, setLabPresets] = useState<LabPreset[]>([]);
 
-  useEffect(() => {
-    if (activeModelId) {
-      detailPanelRef.current?.focus();
-    }
-  }, [activeModelId]);
+  const filterPanelRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Theme colors
+  const colors = useMemo(() => ({
+    bg: isDark ? "#0a0a0b" : "#ffffff",
+    bgSecondary: isDark ? "#141415" : "#f8f9fa",
+    bgTertiary: isDark ? "#1a1a1b" : "#f1f3f5",
+    border: isDark ? "#2a2a2b" : "#e9ecef",
+    text: isDark ? "#ffffff" : "#111827",
+    textMuted: isDark ? "#9CA3AF" : "#6b7280",
+    textSecondary: isDark ? "#6b7280" : "#9ca3af",
+    accent: "#22C55E",
+    accentBg: isDark ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.1)",
+    gold: "#F59E0B",
+    blue: "#3B82F6",
+    red: "#EF4444",
+  }), [isDark]);
+
+  // Load data
   useEffect(() => {
     setHistoryEntries(loadHistory());
+    setLabPresets(loadLabPresets());
+    
+    const handler = () => setLabPresets(loadLabPresets());
+    window.addEventListener("lab-presets-updated", handler);
+    
+    fetch("/api/leaderboard/models")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.models)) setLeaderboardModels(data.models);
+      })
+      .catch(() => {});
   }, []);
 
+  // Handle URL params
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem("model_hub_discovery_chat_v1");
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored) as typeof discoveryMessages;
-      if (Array.isArray(parsed)) setDiscoveryMessages(parsed);
-    } catch {
-      // ignore invalid cache
+    const stackParam = searchParams.get("stack");
+    if (stackParam) {
+      const ids = stackParam.split(",").filter(Boolean);
+      setSelectedIds(new Set(ids));
     }
-  }, []);
+  }, [searchParams]);
 
+  // Close filter panel on click outside
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      "model_hub_discovery_chat_v1",
-      JSON.stringify(discoveryMessages)
-    );
-  }, [discoveryMessages]);
-
-  const modelDisplayName = useMemo(() => {
-    const map = new Map<string, string>();
-    allModels.forEach((model) => map.set(model.id, model.name));
-    return map;
-  }, [allModels]);
-
-  const personalizedRankings = useMemo(() => {
-    const stats = new Map<
-      string,
-      { totalConfidence: number; confidenceCount: number; count: number; lastUsed: number }
-    >();
-
-    for (const entry of historyEntries) {
-      const createdAt = new Date(entry.createdAt).getTime();
-      for (const message of entry.transcript ?? []) {
-        if (!message || typeof message !== "object" || !("role" in message)) continue;
-        const solves = message.tools?.solveQuestions ?? [];
-        for (const solve of solves) {
-          if (!solve.model) continue;
-          const bucket =
-            stats.get(solve.model) ?? {
-              totalConfidence: 0,
-              confidenceCount: 0,
-              count: 0,
-              lastUsed: 0,
-            };
-          bucket.count += 1;
-          if (typeof solve.confidence === "number") {
-            bucket.totalConfidence += solve.confidence;
-            bucket.confidenceCount += 1;
-          }
-          if (!Number.isNaN(createdAt)) {
-            bucket.lastUsed = Math.max(bucket.lastUsed, createdAt);
-          }
-          stats.set(solve.model, bucket);
-        }
-      }
-    }
-
-    const results = Array.from(stats.entries()).map(([modelId, bucket]) => {
-      const avgConfidence =
-        bucket.confidenceCount > 0 ? bucket.totalConfidence / bucket.confidenceCount : null;
-      const score = (avgConfidence ?? 0.65) * 0.7 + Math.min(1, bucket.count / 8) * 0.3;
-      return {
-        id: modelId,
-        name: modelDisplayName.get(modelId) ?? modelId,
-        usageCount: bucket.count,
-        avgConfidence,
-        score,
-        lastUsed: bucket.lastUsed,
-      };
-    });
-
-    return results.sort((a, b) => b.score - a.score).slice(0, 6);
-  }, [historyEntries, modelDisplayName]);
-
-  const differenceSummary = useMemo(() => {
-    if (compareResults.length < 2) return null;
-    const sortedByConfidence = [...compareResults].sort((a, b) => b.confidence - a.confidence);
-    const sortedByLatency = [...compareResults].sort((a, b) => a.durationMs - b.durationMs);
-    const wordCounts = compareResults.map((result) => result.final.split(/\s+/).filter(Boolean).length);
-    const stepCounts = compareResults.map((result) => result.steps.length);
-    const minWords = Math.min(...wordCounts);
-    const maxWords = Math.max(...wordCounts);
-    const minSteps = Math.min(...stepCounts);
-    const maxSteps = Math.max(...stepCounts);
-    return {
-      bestConfidence: sortedByConfidence[0],
-      fastest: sortedByLatency[0],
-      wordRange: [minWords, maxWords] as const,
-      stepRange: [minSteps, maxSteps] as const,
+    if (!filterOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (filterPanelRef.current?.contains(e.target as Node)) return;
+      setFilterOpen(null);
     };
-  }, [compareResults]);
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [filterOpen]);
 
-  const instructorRecommendations = useMemo(
-    () => [
-      {
-        subject: "Math & Physics",
-        models: ["Nexus-Math", "o1", "gpt-4.1"],
-        note: "Prioritize rigor and step-by-step clarity.",
-      },
-      {
-        subject: "Writing & History",
-        models: ["Nexus-Write", "gpt-4o", "claude-3.5-sonnet"],
-        note: "Focus on tone, structure, and citations.",
-      },
-      {
-        subject: "Code & Debugging",
-        models: ["Nexus-Code", "gpt-4.1-mini", "o3-mini"],
-        note: "Fast iteration with strong reasoning.",
-      },
-    ],
-    []
-  );
-
-  const selectedModels = useMemo(
-    () => allModels.filter((model) => selectedIds.has(model.id)),
-    [allModels, selectedIds]
-  );
-
-  const activeModel = useMemo(
-    () => allModels.find((model) => model.id === activeModelId) ?? null,
-    [allModels, activeModelId]
-  );
-
-  const filteredModels = useMemo(() => {
-    const query = modelSearch.trim().toLowerCase();
-    const base = allModels.filter((model) =>
-      discoveryFilterIds ? discoveryFilterIds.has(model.id) : true
+  // Build detailed model data
+  const getDetailedModel = (model: ModelCard, rank: number): DetailedModelData => {
+    const enhanced = ENHANCED_MODEL_DATA[model.id] || {};
+    const leaderboard = leaderboardModels.find(
+      (lm) => lm.name.toLowerCase() === model.name.toLowerCase()
     );
-    if (!query) return base;
-    return base.filter((model) => {
-      const haystack = [
-        model.name,
-        model.provider,
-        model.type,
-        model.routing,
-        model.useCases.join(" "),
-        model.strengths.join(" "),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
+
+    return {
+      id: model.id,
+      rank,
+      model,
+      leaderboard,
+      scores: enhanced.scores || {
+        overall: getCategoryScore(model, "overall"),
+        coding: getCategoryScore(model, "coding"),
+        math: getCategoryScore(model, "math"),
+        reasoning: getCategoryScore(model, "reasoning"),
+        vision: 75,
+        multilingual: 78,
+        instructionFollowing: 82,
+      },
+      pricing: enhanced.pricing || {
+        input: 0.5,
+        output: 1.5,
+        tier: getPriceTier(model),
+      },
+      capabilities: getCapabilities(model),
+      benchmarks: enhanced.benchmarks || [
+        { name: "MMLU", score: 75, percentile: 80 },
+        { name: "HumanEval", score: 72, percentile: 78 },
+      ],
+      latency: enhanced.latency || { avg: 350, p50: 300, p95: 600, p99: 900 },
+      throughput: enhanced.throughput || { tokensPerSecond: 100, requestsPerMinute: 2000 },
+      contextWindow: enhanced.contextWindow || 128000,
+      trainingCutoff: enhanced.trainingCutoff || "2024-01",
+      releaseDate: enhanced.releaseDate || "2024-01-01",
+      description: enhanced.description || model.focus,
+      strengths: enhanced.strengths || model.strengths,
+      weaknesses: enhanced.weaknesses || ["Limited information available"],
+      useCases: enhanced.useCases || model.useCases,
+    };
+  };
+
+  // Filter and sort models
+  const modelRows = useMemo(() => {
+    let rows = allModels.map((model, index) => ({
+      ...getDetailedModel(model, index + 1),
+      isSelected: selectedIds.has(model.id),
+    }));
+
+    // Apply search
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      rows = rows.filter(
+        (row) =>
+          row.model.name.toLowerCase().includes(query) ||
+          row.model.provider.toLowerCase().includes(query) ||
+          row.description.toLowerCase().includes(query) ||
+          row.strengths.some((s) => s.toLowerCase().includes(query))
+      );
+    }
+
+    // Apply provider filters
+    if (providerFilters.size > 0) {
+      rows = rows.filter((row) => providerFilters.has(row.model.provider));
+    }
+
+    // Apply capability filters
+    if (capabilityFilters.size > 0) {
+      rows = rows.filter((row) =>
+        Array.from(capabilityFilters).every((cap) => row.capabilities.includes(cap))
+      );
+    }
+
+    // Apply price filters
+    if (priceFilters.size > 0) {
+      rows = rows.filter((row) => priceFilters.has(row.pricing.tier));
+    }
+
+    // Sort
+    rows.sort((a, b) => {
+      let comparison = 0;
+      if (sortKey === "name") {
+        comparison = a.model.name.localeCompare(b.model.name);
+      } else if (sortKey === "price") {
+        comparison = a.pricing.input - b.pricing.input;
+      } else if (sortKey === "speed") {
+        comparison = a.latency.avg - b.latency.avg;
+      } else {
+        comparison = a.scores[sortKey] - b.scores[sortKey];
+      }
+      return sortDir === "desc" ? -comparison : comparison;
     });
-  }, [allModels, discoveryFilterIds, modelSearch]);
+
+    return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [allModels, searchQuery, providerFilters, capabilityFilters, priceFilters, sortKey, sortDir, selectedIds]);
+
+  // Get unique values for filters
+  const allProviders = useMemo(
+    () => Array.from(new Set(allModels.map((m) => m.provider))).sort(),
+    [allModels]
+  );
+  const allCapabilities = useMemo(
+    () => Array.from(new Set(allModels.flatMap((m) => getCapabilities(m)))).sort(),
+    [allModels]
+  );
+  const priceTiers = ["free", "budget", "standard", "premium", "enterprise"];
+
+  const activeFiltersCount = providerFilters.size + capabilityFilters.size + priceFilters.size;
+  const activeModel = activeModelId ? modelRows.find((r) => r.id === activeModelId) : null;
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
 
   const toggleSelection = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
-    setCompareBanner((prev) => {
-      if (prev) return prev;
-      return selectedIds.has(id) ? "Removed from compare" : "Added to compare";
-    });
-    setTimeout(() => setCompareBanner(null), 1600);
   };
 
-  const handleDeployToStudio = (modelId: string) => {
-    const params = new URLSearchParams();
-    params.set("stack", modelId);
-    router.push(`/studio?${params.toString()}`);
+  const clearFilters = () => {
+    setProviderFilters(new Set());
+    setCapabilityFilters(new Set());
+    setPriceFilters(new Set());
+    setSearchQuery("");
   };
 
-  const scoreFromLabel = (label?: string) => {
-    switch (label?.toLowerCase()) {
-      case "high":
-        return 0.86;
-      case "medium":
-        return 0.72;
-      case "low":
-        return 0.6;
-      default:
-        return 0.7;
-    }
+  const handleCompare = () => {
+    if (selectedIds.size < 2) return;
+    const stack = Array.from(selectedIds).join(",");
+    router.push(`/studio?stack=${encodeURIComponent(stack)}`);
   };
-
-  const getOverallScore = (model: typeof allModels[number]) => {
-    const accuracy = scoreFromLabel(model.accuracy);
-    const speed = scoreFromLabel(model.speed);
-    const cost = scoreFromLabel(model.costEfficiency);
-    const score = accuracy * 0.5 + speed * 0.25 + cost * 0.25;
-    return Math.round(score * 100);
-  };
-
-  const getPricing = (model: typeof allModels[number]) => {
-    const tier = model.costEfficiency.toLowerCase();
-    if (tier === "high") {
-      return { input: "$0.15", output: "$0.60" };
-    }
-    if (tier === "low") {
-      return { input: "$1.50", output: "$4.50" };
-    }
-    return { input: "$0.50", output: "$1.50" };
-  };
-
-  const getCapabilities = (model: typeof allModels[number]) => {
-    const tags = new Set<string>();
-    if (model.type === "Router") tags.add("routing");
-    if (model.useCases.some((useCase) => /code|debug/i.test(useCase))) tags.add("function-calling");
-    if (model.useCases.some((useCase) => /problem|homework|q&a/i.test(useCase))) tags.add("chat");
-    if (model.strengths.some((strength) => /code|debug/i.test(strength))) tags.add("tools");
-    tags.add("text-generation");
-    if (model.speed.toLowerCase() === "fast") tags.add("streaming");
-    return Array.from(tags);
-  };
-
-  const getCategoryScores = (model: typeof allModels[number], overallScore: number) => {
-    const categories = Array.from(new Set([...model.strengths, ...model.useCases])).slice(0, 8);
-    return categories.map((label, index) => {
-      const variance = (index % 4) * 3 - 4;
-      const score = Math.max(58, Math.min(99, overallScore + variance));
-      return { label, score };
-    });
-  };
-
-  const clearAll = () => {
-    setSelectedIds(new Set());
-    setShowComparison(false);
-  };
-
-  const quickSearchItems = [
-    { label: "Fastest models", prompt: "Show me the fastest models" },
-    { label: "Top performers", prompt: "Show me the top performing models overall" },
-    { label: "Best for code", prompt: "What are the best models for coding?" },
-    { label: "Reasoning", prompt: "What are the best reasoning models?" },
-  ];
-
-  const handleQuickSearch = (prompt: string) => {
-    setDiscoveryInput(prompt);
-    handleDiscoverySend(prompt);
-  };
-
-  const rankModelsForQuery = (query: string) => {
-    const lower = query.toLowerCase();
-    return allModels
-      .map((model) => {
-        let score = getOverallScore(model);
-        const haystack = `${model.name} ${model.provider} ${model.routing} ${model.useCases.join(" ")} ${model.strengths.join(" ")} ${model.id}`.toLowerCase();
-        if (lower.includes("code") || lower.includes("debug")) {
-          if (haystack.includes("code") || haystack.includes("debug")) score += 15;
-        }
-        if (lower.includes("math") || lower.includes("physics") || lower.includes("reasoning")) {
-          if (haystack.includes("math") || haystack.includes("reasoning")) score += 12;
-        }
-        if (lower.includes("writing") || lower.includes("essay")) {
-          if (haystack.includes("writing") || haystack.includes("history")) score += 10;
-        }
-        if (lower.includes("vision") || lower.includes("image")) {
-          if (haystack.includes("vision") || haystack.includes("image")) score += 14;
-        }
-        if (lower.includes("cheap") || lower.includes("cost")) {
-          if (model.costEfficiency.toLowerCase() === "high") score += 12;
-        }
-        if (lower.includes("fast") || lower.includes("latency")) {
-          if (model.speed.toLowerCase() === "fast") score += 10;
-        }
-        return { model, score };
-      })
-      .sort((a, b) => b.score - a.score);
-  };
-
-  const buildDiscoveryResponse = (query: string) => {
-    const ranked = rankModelsForQuery(query);
-    const recommendations = ranked.slice(0, 6).map((entry) => {
-      const reasons = [
-        entry.model.accuracy === "High" ? "High accuracy" : "Balanced accuracy",
-        entry.model.speed === "Fast" ? "fast latency" : "steady latency",
-        entry.model.costEfficiency === "High" ? "cost efficient" : "reliable value",
-      ];
-      return {
-        id: entry.model.id,
-        reason: reasons.join(" • "),
-      };
-    });
-    const response =
-      recommendations.length === 0
-        ? "I couldn't find strong matches. Try specifying speed, cost, or a task like code or math."
-        : `Here are the best fits from the Model Hub for “${query}.”`;
-    return { response, recommendations };
-  };
-
-  const handleDiscoverySend = (prompt?: string) => {
-    const input = (prompt ?? discoveryInput).trim();
-    if (!input) return;
-    const userMessage = {
-      id: `user-${Date.now()}`,
-      role: "user" as const,
-      content: input,
+  
+  const handleSavePreset = () => {
+    if (!presetName.trim() || selectedIds.size === 0) return;
+    const preset: LabPreset = {
+      id: typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now()),
+      name: presetName.trim(),
+      models: Array.from(selectedIds),
+      subject: presetSubject,
+      createdAt: new Date().toISOString(),
     };
-    const { response, recommendations } = buildDiscoveryResponse(input);
-    const assistantMessage = {
-      id: `assistant-${Date.now() + 1}`,
-      role: "assistant" as const,
-      content: response,
+    const nextPresets = upsertLabPreset(preset);
+    setLabPresets(nextPresets);
+    setPresetName("");
+    setShowSavePreset(false);
+  };
+
+  const handleChatSend = () => {
+    if (!chatInput.trim()) return;
+    
+    const userMsg: ChatMessage = {
+      id: Date.now().toString(),
+      role: "user",
+      content: chatInput,
+    };
+    
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatInput("");
+    
+    setTimeout(() => {
+      const response = generateModelRecommendation(chatInput, modelRows);
+      setChatMessages((prev) => [...prev, response]);
+    }, 1000);
+  };
+
+  const generateModelRecommendation = (query: string, models: DetailedModelData[]): ChatMessage => {
+    const query_lower = query.toLowerCase();
+    
+    let recommendations: Array<{ id: string; reason: string; confidence: number }> = [];
+    
+    if (query_lower.includes("code") || query_lower.includes("programming")) {
+      recommendations = models
+        .filter((m) => m.scores.coding > 85)
+        .slice(0, 3)
+        .map((m) => ({
+          id: m.id,
+          reason: `Strong coding performance (${m.scores.coding}/100) with ${m.capabilities.includes("function-calling") ? "function calling support" : "excellent code generation"}`,
+          confidence: m.scores.coding / 100,
+        }));
+    } else if (query_lower.includes("cheap") || query_lower.includes("budget")) {
+      recommendations = models
+        .filter((m) => m.pricing.tier === "free" || m.pricing.tier === "budget")
+        .slice(0, 3)
+        .map((m) => ({
+          id: m.id,
+          reason: `${m.pricing.tier === "free" ? "Free" : "Budget-friendly"} pricing at $${m.pricing.input}/1M tokens`,
+          confidence: 0.9,
+        }));
+    } else if (query_lower.includes("fast") || query_lower.includes("quick")) {
+      recommendations = models
+        .filter((m) => m.latency.avg < 350)
+        .sort((a, b) => a.latency.avg - b.latency.avg)
+        .slice(0, 3)
+        .map((m) => ({
+          id: m.id,
+          reason: `Fast inference at ${formatLatency(m.latency.avg)} average latency`,
+          confidence: 0.85,
+        }));
+    } else {
+      recommendations = models
+        .sort((a, b) => b.scores.overall - a.scores.overall)
+        .slice(0, 3)
+        .map((m) => ({
+          id: m.id,
+          reason: `Top overall performance (${m.scores.overall}/100) with ${m.strengths[0]}`,
+          confidence: m.scores.overall / 100,
+        }));
+    }
+    
+    return {
+      id: (Date.now() + 1).toString(),
+      role: "assistant",
+      content: `Based on your needs, I recommend these models:`,
       recommendations,
     };
-    setDiscoveryMessages((prev) => [...prev, userMessage, assistantMessage]);
-    setDiscoveryInput("");
   };
 
-  const handleFilterToRecommendations = (recommendations?: Array<{ id: string }>) => {
-    if (!recommendations || recommendations.length === 0) return;
-    setDiscoveryFilterIds(new Set(recommendations.map((item) => item.id)));
+  const getSortIcon = (key: SortKey) => {
+    if (sortKey !== key) return <ArrowUpDown size={14} color={colors.textSecondary} />;
+    return sortDir === "desc" ? (
+      <ChevronDown size={14} color={colors.accent} />
+    ) : (
+      <ChevronUp size={14} color={colors.accent} />
+    );
   };
 
-  const handleAddTopToCompare = (recommendations?: Array<{ id: string }>, count = 3) => {
-    if (!recommendations || recommendations.length === 0) return;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      recommendations.slice(0, count).forEach((item) => next.add(item.id));
-      return next;
-    });
-    setCompareBanner(`Added top ${Math.min(count, recommendations.length)} to compare`);
-    setTimeout(() => setCompareBanner(null), 1600);
-  };
-
-  const handleOpenTopDetail = (recommendations?: Array<{ id: string }>) => {
-    if (!recommendations || recommendations.length === 0) return;
-    setActiveModelId(recommendations[0].id);
-  };
-
-  const saveCompareHistory = (question: string, results: typeof compareResults) => {
-    const entryId =
-      compareSessionId ?? (typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now()));
-    if (!compareSessionId) setCompareSessionId(entryId);
-    const models = results.map((result) => result.model);
-    const lastModel = models[0] ?? "Model Hub Compare";
-    const nextEntries = upsertHistoryEntry({
-      id: entryId,
-      question,
-      subject: "Model Hub Compare",
-      model: lastModel,
-      models: models.length > 0 ? models : ["Model Hub Compare"],
-      transcript: [
-        { role: "user", content: question },
-        {
-          role: "assistant",
-          content: "",
-          tools: {
-            solveQuestions: results.map((result) => ({
-              steps: result.steps,
-              final: result.final,
-              model: result.model,
-              confidence: result.confidence,
-              citations: [`Model: ${result.usedModel}`],
-              durationMs: result.durationMs,
-              gatewayNote: result.gatewayNote,
-              selectionReason: result.selectionReason,
-            })),
-          },
-        },
-      ],
-      mode: "fast",
-      createdAt: new Date().toISOString(),
-    });
-    setHistoryEntries(nextEntries);
-  };
-
-  const runCompare = async () => {
-    if (compareStatus === "loading") return;
-    if (!compareQuestion.trim() || selectedModels.length === 0) return;
-    setCompareStatus("loading");
-    setShowComparison(true);
-    try {
-      setCompareResults([]);
-      const response = await fetch("/api/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: compareQuestion,
-          models: selectedModels.map((model) => model.id),
-          mode: "fast",
-          maxSameModel,
-          attachments: [],
-          streaming: responseSettings.streaming,
-          temperature: responseSettings.temperature,
-          maxTokens: responseSettings.maxTokens,
-        }),
-      });
-      if (!response.ok || !response.body) throw new Error("Compare request failed");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const order = selectedModels.map((model) => model.id);
-      const nextResults: typeof compareResults = [];
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          const event = JSON.parse(trimmed) as { type: string; payload?: any };
-          if (event.type === "result" && event.payload) {
-            const payload = event.payload as {
-              model: string;
-              usedModel: string;
-              final: string;
-              steps: string[];
-              confidence: number;
-              durationMs: number;
-              gatewayNote?: string;
-              selectionReason?: string;
-            };
-            const existingIndex = nextResults.findIndex((item) => item.model === payload.model);
-            if (existingIndex >= 0) {
-              nextResults[existingIndex] = payload;
-            } else {
-              nextResults.push(payload);
-            }
-            const ordered = [...nextResults].sort(
-              (a, b) => order.indexOf(a.model) - order.indexOf(b.model)
-            );
-            setCompareResults(ordered);
-          }
-        }
-      }
-      setCompareStatus("idle");
-      saveCompareHistory(compareQuestion, nextResults);
-    } catch {
-      setCompareStatus("error");
-    }
+  const getTierColor = (tier: string) => {
+    const colors: Record<string, string> = {
+      free: "#22C55E",
+      budget: "#10B981",
+      standard: "#F59E0B",
+      premium: "#EF4444",
+      enterprise: "#8B5CF6",
+    };
+    return colors[tier] || colors.textSecondary;
   };
 
   return (
-    <YStack flex={1} backgroundColor="$background" minHeight="100vh">
+    <YStack flex={1} backgroundColor={colors.bg} minHeight="100vh">
       <Header />
 
-      <YStack
-        flex={1}
-        padding="$xl"
-        maxWidth={1200}
-        marginHorizontal="auto"
-        width="100%"
-      >
-        <H1 fontSize={32} fontWeight="700" color="$color" marginBottom="$sm">
-          Model Hub
-        </H1>
-        <Paragraph color="$textMuted" fontSize={16} maxWidth={720} marginBottom="$lg">
-          Browse every model and router. Select multiple cards to compare them side by side.
-        </Paragraph>
-
-
-        <YStack gap="$sm" marginBottom="$lg">
-          {([
-            { key: "rankings", title: "Personalized model rankings" },
-            { key: "instructor", title: "Instructor recommended models" },
-            { key: "difference", title: "Explain the difference view" },
-          ] as const).map((section) => (
-            <YStack
-              key={section.key}
-              borderWidth={1}
-              borderColor="$border"
-              borderRadius="$md"
-              backgroundColor="$background"
+      <XStack flex={1} overflow="hidden">
+        {/* Left Sidebar - Collapsible Chat */}
+        {isChatOpen && (
+          <YStack
+            width={360}
+            minWidth={360}
+            backgroundColor={colors.bgSecondary}
+            borderRightWidth={1}
+            borderColor={colors.border}
+          >
+            {/* Chat Header */}
+            <XStack
+              padding="$md"
+              borderBottomWidth={1}
+              borderColor={colors.border}
+              justifyContent="space-between"
+              alignItems="center"
             >
+              <XStack alignItems="center" gap="$xs">
+                <Bot size={20} color={colors.accent} />
+                <Text fontSize={16} fontWeight="600" color={colors.text}>
+                  Model Assistant
+                </Text>
+              </XStack>
               <Button
-                size="$3"
+                size="$2"
                 backgroundColor="transparent"
                 borderWidth={0}
-                justifyContent="space-between"
-                onPress={() =>
-                  setInfoPanel((prev) => (prev === section.key ? null : section.key))
-                }
-              >
-                <XStack alignItems="center" justifyContent="space-between" flex={1}>
-                  <Text fontSize={13} color="$color">
-                    {section.title}
-                  </Text>
-                  <Text fontSize={12} color="$textMuted">
-                    {infoPanel === section.key ? "▾" : "▸"}
-                  </Text>
-                </XStack>
-              </Button>
-
-              {infoPanel === section.key && (
-                <YStack padding="$md" gap="$xs">
-                  {section.key === "rankings" &&
-                    (personalizedRankings.length > 0 ? (
-                      <YStack gap="$xs">
-                        {personalizedRankings.map((entry, index) => (
-                          <XStack key={entry.id} justifyContent="space-between" alignItems="center">
-                            <Text fontSize={12} color="$color">
-                              {index + 1}. {entry.name}
-                            </Text>
-                            <XStack gap="$sm" alignItems="center">
-                              {typeof entry.avgConfidence === "number" && (
-                                <Text fontSize={11} color="$textMuted">
-                                  {(entry.avgConfidence * 100).toFixed(0)}%
-                                </Text>
-                              )}
-                              <Text fontSize={11} color="$textMuted">
-                                {entry.usageCount} runs
-                              </Text>
-                            </XStack>
-                          </XStack>
-                        ))}
-                      </YStack>
-                    ) : (
-                      <Text fontSize={12} color="$textMuted">
-                        Rankings appear after you use a few models.
-                      </Text>
-                    ))}
-
-                  {section.key === "instructor" && (
-                    <YStack gap="$sm">
-                      {instructorRecommendations.map((rec) => (
-                        <YStack key={rec.subject} gap={2}>
-                          <Text fontSize={12} color="$color">
-                            {rec.subject}
-                          </Text>
-                          <Text fontSize={11} color="$textMuted">
-                            {rec.models
-                              .map((modelId) => modelDisplayName.get(modelId) ?? modelId)
-                              .join(", ")}
-                          </Text>
-                          <Text fontSize={11} color="$textMuted">
-                            {rec.note}
-                          </Text>
-                        </YStack>
-                      ))}
-                    </YStack>
-                  )}
-
-                  {section.key === "difference" &&
-                    (differenceSummary ? (
-                      <YStack gap="$xs">
-                        <Text fontSize={12} color="$color">
-                          Most confident: {modelDisplayName.get(differenceSummary.bestConfidence.model) ?? differenceSummary.bestConfidence.model} (
-                          {(differenceSummary.bestConfidence.confidence * 100).toFixed(0)}%)
-                        </Text>
-                        <Text fontSize={12} color="$color">
-                          Fastest: {modelDisplayName.get(differenceSummary.fastest.model) ?? differenceSummary.fastest.model} (
-                          {Math.round(differenceSummary.fastest.durationMs)} ms)
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Answer length range: {differenceSummary.wordRange[0]}-{differenceSummary.wordRange[1]} words
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Step count range: {differenceSummary.stepRange[0]}-{differenceSummary.stepRange[1]} steps
-                        </Text>
-                      </YStack>
-                    ) : (
-                      <Text fontSize={12} color="$textMuted">
-                        Run a comparison to see how models answered differently.
-                      </Text>
-                    ))}
-                </YStack>
-              )}
-            </YStack>
-          ))}
-        </YStack>
-
-        <XStack gap="$lg" alignItems="flex-start" position="relative">
-          <YStack
-            width={260}
-            minWidth={240}
-            borderWidth={1}
-            borderColor="$border"
-            borderRadius="$md"
-            padding="$md"
-            backgroundColor="$background"
-            gap="$md"
-            position="sticky"
-            top={90}
-            alignSelf="flex-start"
-          >
-            <YStack gap={2}>
-              <Text fontSize={16} fontWeight="700" color="$color">
-                AI Model Discovery
-              </Text>
-              <Text fontSize={12} color="$textMuted">
-                Ask me to find or compare models
-              </Text>
-            </YStack>
-
-            <XStack gap="$xs" flexWrap="wrap">
-              {quickSearchItems.map((item) => (
-                <Button
-                  key={item.label}
-                  size="$2"
-                  backgroundColor="transparent"
-                  borderWidth={1}
-                  borderColor="$border"
-                  color="$color"
-                  onPress={() => handleQuickSearch(item.prompt)}
-                >
-                  {item.label}
-                </Button>
-              ))}
+                color={colors.textMuted}
+                onPress={() => setIsChatOpen(false)}
+                icon={<X size={18} />}
+              />
             </XStack>
 
-            <YStack
-              flex={1}
-              borderWidth={1}
-              borderColor="$border"
-              borderRadius="$md"
-              padding="$sm"
-              backgroundColor="$backgroundSecondary"
-              gap="$sm"
-              overflow="scroll"
-              maxHeight={compareMode ? 480 : 360}
-            >
-              {discoveryMessages.length === 0 ? (
-                <YStack gap="$sm">
-                  <Text fontSize={13} fontWeight="600" color="$color">
-                    Find Your Perfect Model
-                  </Text>
-                  <Text fontSize={12} color="$textMuted">
-                    Ask about speed, cost, reasoning, or use cases and I will surface the best fits.
-                  </Text>
-                </YStack>
-              ) : (
-                discoveryMessages.map((message) => (
-                  <YStack
-                    key={message.id}
-                    gap="$xs"
-                    alignSelf={message.role === "user" ? "flex-end" : "flex-start"}
-                    maxWidth="100%"
-                  >
-                    <Text
-                      fontSize={12}
-                      color={message.role === "user" ? "$background" : "$color"}
-                      padding="$sm"
-                      borderRadius="$md"
-                      backgroundColor={message.role === "user" ? "$color" : "$background"}
-                    >
-                      {message.content}
-                    </Text>
-                    {message.role === "assistant" && message.recommendations && (
-                      <YStack gap={2}>
-                        {message.recommendations.map((rec) => (
-                          <XStack key={rec.id} justifyContent="space-between" gap="$xs">
-                            <Text fontSize={11} color="$color">
-                              {modelDisplayName.get(rec.id) ?? rec.id}
-                            </Text>
-                            <Text fontSize={11} color="$textMuted">
-                              {rec.reason}
-                            </Text>
-                          </XStack>
-                        ))}
-                        <XStack gap="$xs" flexWrap="wrap" marginTop="$xs">
-                          <Button
-                            size="$1"
-                            backgroundColor="transparent"
-                            borderWidth={1}
-                            borderColor="$border"
-                            color="$color"
-                            onPress={() => handleFilterToRecommendations(message.recommendations)}
-                          >
-                            Filter list
-                          </Button>
-                          <Button
-                            size="$1"
-                            backgroundColor="transparent"
-                            borderWidth={1}
-                            borderColor="$border"
-                            color="$color"
-                            onPress={() => handleAddTopToCompare(message.recommendations, 3)}
-                          >
-                            Add top 3 to Compare
-                          </Button>
-                          <Button
-                            size="$1"
-                            backgroundColor="transparent"
-                            borderWidth={1}
-                            borderColor="$border"
-                            color="$color"
-                            onPress={() => handleOpenTopDetail(message.recommendations)}
-                          >
-                            Open top model
-                          </Button>
-                        </XStack>
-                      </YStack>
-                    )}
-                  </YStack>
-                ))
-              )}
-            </YStack>
+            {/* Chat Mode Selector */}
+            <XStack padding="$sm" gap="$xs">
+              <Button
+                flex={1}
+                size="$2"
+                backgroundColor={chatMode === "discover" ? colors.accent : colors.bgTertiary}
+                color={chatMode === "discover" ? "black" : colors.text}
+                borderRadius="$md"
+                onPress={() => setChatMode("discover")}
+                icon={<Sparkles size={14} />}
+              >
+                Find Model
+              </Button>
+              <Button
+                flex={1}
+                size="$2"
+                backgroundColor={chatMode === "compare" ? colors.accent : colors.bgTertiary}
+                color={chatMode === "compare" ? "black" : colors.text}
+                borderRadius="$md"
+                onPress={() => setChatMode("compare")}
+                icon={<Layers size={14} />}
+              >
+                Compare
+              </Button>
+            </XStack>
 
-            <YStack gap="$xs">
-              <TextArea
-                value={compareMode ? compareQuestion : discoveryInput}
-                onChangeText={compareMode ? setCompareQuestion : setDiscoveryInput}
-                placeholder={compareMode ? "Compare prompt…" : "Ask about models…"}
-                minHeight={compareMode ? 90 : 70}
-                borderColor="$border"
-                backgroundColor="$background"
-                fontSize={13}
-                padding="$sm"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    if (compareMode) {
-                      runCompare();
-                    } else {
-                      handleDiscoverySend();
-                    }
-                  }
-                }}
-              />
-              {compareMode && (
-                <YStack gap="$xs" marginBottom="$xs">
-                  <XStack justifyContent="space-between" alignItems="center">
-                    <Text fontSize={11} color="$textMuted">
-                      Live streaming
-                    </Text>
-                    <Button
-                      size="$1"
-                      backgroundColor={responseSettings.streaming ? "$color" : "transparent"}
-                      color={responseSettings.streaming ? "$background" : "$color"}
-                      borderWidth={1}
-                      borderColor="$border"
-                      onPress={() =>
-                        setResponseSettings((prev) => ({
-                          ...prev,
-                          streaming: !prev.streaming,
-                        }))
-                      }
-                    >
-                      {responseSettings.streaming ? "On" : "Off"}
-                    </Button>
-                  </XStack>
-                  <YStack gap={2}>
-                    <Text fontSize={11} color="$textMuted">
-                      Temperature: {responseSettings.temperature.toFixed(1)}
-                    </Text>
-                    <input
-                      type="range"
-                      min={0}
-                      max={2}
-                      step={0.1}
-                      value={responseSettings.temperature}
-                      onChange={(event) =>
-                        setResponseSettings((prev) => ({
-                          ...prev,
-                          temperature: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  </YStack>
-                  <YStack gap={2}>
-                    <Text fontSize={11} color="$textMuted">
-                      Max tokens: {responseSettings.maxTokens}
-                    </Text>
-                    <input
-                      type="range"
-                      min={200}
-                      max={2400}
-                      step={100}
-                      value={responseSettings.maxTokens}
-                      onChange={(event) =>
-                        setResponseSettings((prev) => ({
-                          ...prev,
-                          maxTokens: Number(event.target.value),
-                        }))
-                      }
-                    />
+            {/* Chat Messages */}
+            <YStack flex={1} padding="$md" gap="$md" overflow="scroll">
+              {chatMessages.length === 0 && (
+                <YStack gap="$md" alignItems="center" padding="$xl">
+                  <Sparkles size={48} color={colors.border} />
+                  <Text fontSize={14} color={colors.textMuted} textAlign="center">
+                    {chatMode === "compare"
+                      ? "Select models from the leaderboard, then ask me to compare them."
+                      : "Describe what you need, and I'll recommend the best models for you."}
+                  </Text>
+                  <YStack gap="$xs" width="100%">
+                    {[
+                      "What's the best model for coding?",
+                      "Find me a fast, cheap model",
+                      "Compare GPT-4o and Claude",
+                    ].map((suggestion) => (
+                      <Button
+                        key={suggestion}
+                        size="$2"
+                        backgroundColor={colors.bgTertiary}
+                        color={colors.textMuted}
+                        borderWidth={1}
+                        borderColor={colors.border}
+                        onPress={() => {
+                          setChatInput(suggestion);
+                          setTimeout(handleChatSend, 100);
+                        }}
+                      >
+                        {suggestion}
+                      </Button>
+                    ))}
                   </YStack>
                 </YStack>
               )}
-              <XStack gap="$xs">
-                <Button
-                  size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  onPress={() => {
-                    if (compareMode) {
-                      runCompare();
-                    } else {
-                      handleDiscoverySend();
-                    }
-                  }}
-                  disabled={compareMode && (compareStatus === "loading" || selectedModels.length === 0)}
-                >
-                  {compareMode ? (compareStatus === "loading" ? "Comparing..." : "Run Compare") : "Send"}
-                </Button>
-                <Button
-                  size="$3"
-                  backgroundColor="transparent"
-                  borderWidth={1}
-                  borderColor="$border"
-                  color="$color"
-                  onPress={() => {
-                    if (compareMode) {
-                      setCompareMode(false);
-                      return;
-                    }
-                    setCompareMode(true);
-                    if (!compareQuestion && discoveryInput) setCompareQuestion(discoveryInput);
-                  }}
-                >
-                  {compareMode ? "Back" : "Compare"}
-                </Button>
-              </XStack>
-            </YStack>
-          </YStack>
 
-          <YStack flex={1} minWidth={0}>
-            <XStack alignItems="center" justifyContent="space-between" flexWrap="wrap" marginBottom="$md">
-              <Text fontSize={14} color="$textMuted">
-                All models • Showing: {filteredModels.length} • Selected: {selectedModels.length}
-              </Text>
-              <XStack gap="$sm">
-                <input
-                  value={modelSearch}
-                  onChange={(event) => setModelSearch(event.target.value)}
-                  placeholder="Search models..."
+              {chatMessages.map((msg) => (
+                <YStack
+                  key={msg.id}
+                  alignSelf={msg.role === "user" ? "flex-end" : "flex-start"}
+                  maxWidth="85%"
+                  backgroundColor={msg.role === "user" ? colors.accent : colors.bgTertiary}
+                  padding="$md"
+                  borderRadius="$lg"
+                  borderBottomRightRadius={msg.role === "user" ? 4 : undefined}
+                  borderBottomLeftRadius={msg.role === "assistant" ? 4 : undefined}
+                >
+                  <Text fontSize={14} color={msg.role === "user" ? "black" : colors.text}>
+                    {msg.content}
+                  </Text>
+                  
+                  {msg.recommendations && (
+                    <YStack gap="$sm" marginTop="$sm">
+                      {msg.recommendations.map((rec) => {
+                        const model = modelRows.find((m) => m.id === rec.id);
+                        if (!model) return null;
+                        return (
+                          <Button
+                            key={rec.id}
+                            size="$2"
+                            backgroundColor={colors.bgSecondary}
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            borderRadius="$md"
+                            onPress={() => setActiveModelId(rec.id)}
+                            justifyContent="flex-start"
+                          >
+                            <YStack alignItems="flex-start" gap="$xs">
+                              <XStack alignItems="center" gap="$xs">
+                                <Text fontSize={13} fontWeight="600" color={colors.text}>
+                                  {model.model.name}
+                                </Text>
+                                <Text fontSize={11} color={colors.accent}>
+                                  {Math.round(rec.confidence * 100)}% match
+                                </Text>
+                              </XStack>
+                              <Text fontSize={12} color={colors.textMuted} numberOfLines={2}>
+                                {rec.reason}
+                              </Text>
+                            </YStack>
+                          </Button>
+                        );
+                      })}
+                    </YStack>
+                  )}
+                </YStack>
+              ))}
+            </YStack>
+
+            {/* Chat Input */}
+            <YStack padding="$md" borderTopWidth={1} borderColor={colors.border} gap="$sm">
+              <XStack alignItems="flex-end" gap="$sm">
+                <textarea
+                  ref={chatInputRef}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSend();
+                    }
+                  }}
+                  placeholder="Ask about models..."
                   style={{
-                    width: 220,
-                    padding: "8px 10px",
+                    flex: 1,
+                    backgroundColor: colors.bgTertiary,
+                    border: `1px solid ${colors.border}`,
                     borderRadius: 8,
-                    border: "1px solid #e5e5e5",
-                    background: "#fff",
-                    color: "#111",
-                    fontSize: 12,
+                    padding: 12,
+                    color: colors.text,
+                    fontSize: 14,
+                    resize: "none",
+                    minHeight: 44,
+                    maxHeight: 120,
+                    fontFamily: "inherit",
                   }}
                 />
                 <Button
                   size="$3"
-                  backgroundColor={viewMode === "grid" ? "$color" : "transparent"}
-                  color={viewMode === "grid" ? "$background" : "$color"}
-                  borderWidth={1}
-                  borderColor="$border"
-                  borderRadius="$sm"
-                  onPress={() => setViewMode("grid")}
-                >
-                  Grid
-                </Button>
-                <Button
-                  size="$3"
-                  backgroundColor={viewMode === "list" ? "$color" : "transparent"}
-                  color={viewMode === "list" ? "$background" : "$color"}
-                  borderWidth={1}
-                  borderColor="$border"
-                  borderRadius="$sm"
-                  onPress={() => setViewMode("list")}
-                >
-                  List
-                </Button>
-              </XStack>
-            </XStack>
-
-            <XStack justifyContent="space-between" alignItems="center" marginBottom="$sm">
-              <Text fontSize={12} color="$textMuted">
-                {selectedModels.length} Models Selected for Compare
-              </Text>
-              <XStack gap="$sm">
-                {discoveryFilterIds && (
-                  <Button
-                    size="$2"
-                    backgroundColor="transparent"
-                    borderWidth={1}
-                    borderColor="$border"
-                    color="$color"
-                    onPress={() => setDiscoveryFilterIds(null)}
-                  >
-                    Clear filter
-                  </Button>
-                )}
-                {compareBanner && (
-                  <Text fontSize={11} color="$textMuted">
-                    {compareBanner}
-                  </Text>
-                )}
-              </XStack>
-            </XStack>
-
-            {showComparison && selectedModels.length > 1 && (
-              <YStack marginBottom="$md" gap="$sm" ref={compareSectionRef}>
-                <Text fontSize={14} color="$textMuted">
-                  Compare results
-                </Text>
-                {compareResults.length > 0 && (
-                  <XStack gap="$lg" flexWrap="wrap">
-                    {compareResults.map((result) => (
-                      <YStack
-                        key={`compare-result-${result.model}`}
-                        flex={1}
-                        minWidth={280}
-                        borderWidth={1}
-                        borderColor="$border"
-                        borderRadius="$md"
-                        padding="$lg"
-                      >
-                        <Text fontSize={14} fontWeight="600" color="$color" marginBottom="$xs">
-                          {modelDisplayName.get(result.model) ?? result.model}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                          Used: {modelDisplayName.get(result.usedModel) ?? result.usedModel}
-                        </Text>
-                        {result.selectionReason && (
-                          <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                            Why selected: {result.selectionReason}
-                          </Text>
-                        )}
-                        {result.gatewayNote && (
-                          <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                            {result.gatewayNote}
-                          </Text>
-                        )}
-                        <Text fontSize={13} color="$color" marginBottom="$sm">
-                          {result.final}
-                        </Text>
-                        <XStack justifyContent="space-between" flexWrap="wrap">
-                          <Text fontSize={12} color="$textMuted">
-                            Confidence: {(result.confidence * 100).toFixed(0)}%
-                          </Text>
-                          <Text fontSize={12} color="$textMuted">
-                            Latency: {Math.round(result.durationMs)} ms
-                          </Text>
-                        </XStack>
-                      </YStack>
-                    ))}
-                  </XStack>
-                )}
-                <YStack borderWidth={1} borderColor="$border" borderRadius="$md">
-                  <XStack
-                    padding="$sm"
-                    borderBottomWidth={1}
-                    borderColor="$border"
-                    backgroundColor="$backgroundSecondary"
-                  >
-                    <Text flex={2} fontSize={12} color="$textMuted">
-                      Model
-                    </Text>
-                    <Text flex={1} fontSize={12} color="$textMuted">
-                      Speed
-                    </Text>
-                    <Text flex={1} fontSize={12} color="$textMuted">
-                      Accuracy
-                    </Text>
-                    <Text flex={1} fontSize={12} color="$textMuted">
-                      Cost-efficiency
-                    </Text>
-                    <Text flex={2} fontSize={12} color="$textMuted">
-                      Strengths
-                    </Text>
-                  </XStack>
-                  {selectedModels.map((model) => (
-                    <XStack
-                      key={`compare-${model.id}`}
-                      padding="$sm"
-                      borderBottomWidth={1}
-                      borderColor="$border"
-                    >
-                      <Text flex={2} fontSize={13} color="$color">
-                        {model.name}
-                      </Text>
-                      <Text flex={1} fontSize={13} color="$color">
-                        {model.speed}
-                      </Text>
-                      <Text flex={1} fontSize={13} color="$color">
-                        {model.accuracy}
-                      </Text>
-                      <Text flex={1} fontSize={13} color="$color">
-                        {model.costEfficiency}
-                      </Text>
-                      <Text flex={2} fontSize={13} color="$textMuted">
-                        {model.strengths.join(", ")}
-                      </Text>
-                    </XStack>
-                  ))}
-                </YStack>
-              </YStack>
-            )}
-
-            {selectedModels.length > 1 && (
-              <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$sm"
-                backgroundColor="$backgroundSecondary"
-                marginBottom="$md"
-              >
-                <Text fontSize={12} color="$textMuted">
-                  Selected models ({selectedModels.length})
-                </Text>
-                <XStack gap="$xs" flexWrap="wrap" marginTop="$xs">
-                  {selectedModels.map((model) => (
-                    <Text
-                      key={`selected-${model.id}`}
-                      fontSize={12}
-                      color="$color"
-                      borderWidth={1}
-                      borderColor="$border"
-                      borderRadius="$full"
-                      paddingHorizontal="$sm"
-                      paddingVertical={4}
-                    >
-                      {model.name}
-                    </Text>
-                  ))}
-                </XStack>
-                <XStack gap="$sm" marginTop="$sm">
-                  <Button
-                    size="$3"
-                    backgroundColor="transparent"
-                    borderWidth={1}
-                    borderColor="$border"
-                    color="$color"
-                    onPress={clearAll}
-                  >
-                    Clear all
-                  </Button>
-                <Button
-                  size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  onPress={() => {
-                    setCompareMode(true);
-                    if (compareResults.length > 0) {
-                      setShowComparison(true);
-                      compareSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }
-                  }}
-                >
-                  Compare models
-                </Button>
+                  backgroundColor={colors.accent}
+                  color="black"
+                  borderRadius="$md"
+                  onPress={handleChatSend}
+                  disabled={!chatInput.trim()}
+                  icon={<Send size={18} />}
+                />
               </XStack>
             </YStack>
-          )}
+          </YStack>
+        )}
 
-            {filteredModels.length === 0 ? (
-              <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$lg"
-                backgroundColor="$backgroundSecondary"
-                gap="$sm"
-              >
-                <Text fontSize={13} color="$color">
-                  No models match that search.
+        {/* Chat Toggle Button (when closed) */}
+        {!isChatOpen && (
+          <YStack
+            position="absolute"
+            left={0}
+            top={80}
+            zIndex={100}
+          >
+            <Button
+              size="$3"
+              backgroundColor={colors.accent}
+              color="black"
+              borderTopLeftRadius={0}
+              borderBottomLeftRadius={0}
+              borderTopRightRadius="$md"
+              borderBottomRightRadius="$md"
+              onPress={() => setIsChatOpen(true)}
+              icon={<ChevronRight size={20} />}
+            >
+              <YStack alignItems="flex-start">
+                <Text fontSize={12} fontWeight="600" color="black">
+                  Model Assistant
                 </Text>
-                <Button
-                  size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  onPress={() => setModelSearch("")}
-                >
-                  Clear search
-                </Button>
+                <Text fontSize={10} color="rgba(0,0,0,0.6)">
+                  Find & Compare
+                </Text>
               </YStack>
-            ) : viewMode === "list" ? (
-              <YStack gap="$lg">
-                {filteredModels.map((model) => {
-                  const isSelected = selectedIds.has(model.id);
-                  const isActive = activeModelId === model.id;
-                  return (
-                    <YStack
-                      key={model.id}
-                      borderWidth={2}
-                      borderColor={isActive ? "$color" : isSelected ? "$accent" : "$border"}
-                      borderRadius="$md"
-                      padding="$lg"
-                      backgroundColor={isActive ? "$backgroundSecondary" : "$background"}
-                      onPress={() => setActiveModelId(model.id)}
-                    >
-                      <XStack alignItems="center" justifyContent="space-between" marginBottom="$sm">
-                        <Text fontSize={16} fontWeight="600" color="$color">
-                          {model.name}
-                        </Text>
-                        <XStack gap="$sm" alignItems="center">
-                          {isSelected && (
-                            <Text fontSize={11} color="$textMuted">
-                              In compare
-                            </Text>
-                          )}
-                          <Text fontSize={12} color={model.status === "Active" ? "$success" : "$textMuted"}>
-                            {model.status}
-                          </Text>
-                        </XStack>
-                      </XStack>
-                      <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                        {model.type} • {model.provider}
-                      </Text>
-                      <Text fontSize={13} color="$color" marginBottom="$sm">
-                        {model.routing}
-                      </Text>
-                      <XStack gap="$xs" flexWrap="wrap" marginBottom="$sm">
-                        {model.useCases.map((useCase) => (
-                          <Text
-                            key={`${model.id}-${useCase}`}
-                            fontSize={12}
-                            color="$color"
-                            borderWidth={1}
-                            borderColor="$border"
-                            borderRadius="$full"
-                            paddingHorizontal="$sm"
-                            paddingVertical={4}
-                          >
-                            {useCase}
-                          </Text>
-                        ))}
-                      </XStack>
-                      <XStack gap="$xs" flexWrap="wrap" marginBottom="$sm">
-                        {model.strengths.map((strength) => (
-                          <Text
-                            key={`${model.id}-${strength}`}
-                            fontSize={12}
-                            color="$textMuted"
-                            borderWidth={1}
-                            borderColor="$border"
-                            borderRadius="$full"
-                            paddingHorizontal="$sm"
-                            paddingVertical={4}
-                          >
-                            {strength}
-                          </Text>
-                        ))}
-                      </XStack>
-                      <XStack justifyContent="space-between" flexWrap="wrap">
-                        <Text fontSize={12} color="$textMuted">
-                          Speed: {model.speed}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Accuracy: {model.accuracy}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Cost: {model.costEfficiency}
-                        </Text>
-                      </XStack>
-                      <XStack justifyContent="space-between" flexWrap="wrap" marginTop="$xs">
-                        <Text fontSize={12} color="$textMuted">
-                          Availability: {model.availability}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Latency: {model.latency}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Reliability: {model.reliability}
-                        </Text>
-                      </XStack>
-                    </YStack>
-                  );
-                })}
-              </YStack>
-            ) : (
-              <XStack gap="$lg" flexWrap="wrap">
-                {filteredModels.map((model) => {
-                  const isSelected = selectedIds.has(model.id);
-                  const isActive = activeModelId === model.id;
-                  return (
-                    <YStack
-                      key={model.id}
-                      flex={1}
-                      minWidth={280}
-                      borderWidth={2}
-                      borderColor={isActive ? "$color" : isSelected ? "$accent" : "$border"}
-                      borderRadius="$md"
-                      padding="$lg"
-                      backgroundColor={isActive ? "$backgroundSecondary" : "$background"}
-                      onPress={() => setActiveModelId(model.id)}
-                    >
-                      <XStack alignItems="center" justifyContent="space-between" marginBottom="$sm">
-                        <Text fontSize={16} fontWeight="600" color="$color">
-                          {model.name}
-                        </Text>
-                        <XStack gap="$sm" alignItems="center">
-                          {isSelected && (
-                            <Text fontSize={11} color="$textMuted">
-                              In compare
-                            </Text>
-                          )}
-                          <Text fontSize={12} color={model.status === "Active" ? "$success" : "$textMuted"}>
-                            {model.status}
-                          </Text>
-                        </XStack>
-                      </XStack>
-                      <Text fontSize={12} color="$textMuted" marginBottom="$xs">
-                        {model.type} • {model.provider}
-                      </Text>
-                      <Text fontSize={13} color="$color" marginBottom="$sm">
-                        {model.routing}
-                      </Text>
-                      <XStack gap="$xs" flexWrap="wrap" marginBottom="$sm">
-                        {model.useCases.map((useCase) => (
-                          <Text
-                            key={`${model.id}-${useCase}`}
-                            fontSize={12}
-                            color="$color"
-                            borderWidth={1}
-                            borderColor="$border"
-                            borderRadius="$full"
-                            paddingHorizontal="$sm"
-                            paddingVertical={4}
-                          >
-                            {useCase}
-                          </Text>
-                        ))}
-                      </XStack>
-                      <XStack gap="$xs" flexWrap="wrap" marginBottom="$sm">
-                        {model.strengths.map((strength) => (
-                          <Text
-                            key={`${model.id}-${strength}`}
-                            fontSize={12}
-                            color="$textMuted"
-                            borderWidth={1}
-                            borderColor="$border"
-                            borderRadius="$full"
-                            paddingHorizontal="$sm"
-                            paddingVertical={4}
-                          >
-                            {strength}
-                          </Text>
-                        ))}
-                      </XStack>
-                      <XStack justifyContent="space-between" flexWrap="wrap">
-                        <Text fontSize={12} color="$textMuted">
-                          Speed: {model.speed}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Accuracy: {model.accuracy}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Cost: {model.costEfficiency}
-                        </Text>
-                      </XStack>
-                      <XStack justifyContent="space-between" flexWrap="wrap" marginTop="$xs">
-                        <Text fontSize={12} color="$textMuted">
-                          Availability: {model.availability}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Latency: {model.latency}
-                        </Text>
-                        <Text fontSize={12} color="$textMuted">
-                          Reliability: {model.reliability}
-                        </Text>
-                      </XStack>
-                    </YStack>
-                  );
-                })}
+            </Button>
+          </YStack>
+        )}
+
+        {/* Main Content */}
+        <YStack flex={1} padding="$lg" maxWidth={activeModelId ? 1000 : 1400} marginHorizontal="auto">
+          {/* Header */}
+          <YStack gap="$xs" marginBottom="$lg">
+            <XStack alignItems="center" gap="$sm" justifyContent="space-between">
+              <XStack alignItems="center" gap="$sm">
+                <Trophy size={28} color={colors.gold} />
+                <H1 fontSize={32} fontWeight="800" color={colors.text}>
+                  Model Leaderboard
+                </H1>
               </XStack>
-            )}
+              <Button
+                size="$3"
+                backgroundColor={colors.bgTertiary}
+                color={colors.text}
+                borderWidth={1}
+                borderColor={colors.border}
+                borderRadius="$md"
+                onPress={() => setTheme(isDark ? "light" : "dark")}
+                icon={isDark ? <Sun size={18} /> : <Moon size={18} />}
+              >
+                {isDark ? "Light" : "Dark"}
+              </Button>
+            </XStack>
+            <Paragraph color={colors.textMuted} fontSize={15} maxWidth={600}>
+              Compare AI models across coding, math, and reasoning benchmarks. Click any model for detailed insights.
+            </Paragraph>
           </YStack>
 
-          {activeModel && (
-            <YStack
-              ref={detailPanelRef}
-              tabIndex={-1}
-              width={isNarrow ? "100%" : 360}
-              minHeight={isNarrow ? "100%" : 520}
-              borderWidth={1}
-              borderColor="$border"
+          {/* Selected Models Bar */}
+          {selectedIds.size > 0 && (
+            <XStack
+              marginBottom="$md"
+              padding="$md"
+              backgroundColor={colors.accentBg}
               borderRadius="$md"
-              padding="$lg"
-              backgroundColor="$background"
-              position={isNarrow ? "absolute" : "sticky"}
-              top={isNarrow ? 0 : 90}
-              right={isNarrow ? 0 : undefined}
-              bottom={isNarrow ? 0 : undefined}
-              zIndex={isNarrow ? 20 : undefined}
-              shadowColor="rgba(0,0,0,0.2)"
-              shadowOpacity={isNarrow ? 0.2 : 0}
-              shadowRadius={isNarrow ? 12 : 0}
-              overflow="hidden"
-              gap="$md"
+              borderWidth={1}
+              borderColor={colors.accent}
+              flexWrap="wrap"
+              gap="$sm"
+              alignItems="center"
             >
-              <XStack justifyContent="space-between" alignItems="flex-start" gap="$sm">
-                <YStack gap="$xs">
-                  <Text fontSize={18} fontWeight="700" color="$color">
-                    {activeModel.name}
-                  </Text>
-                  <Text fontSize={12} color="$textMuted">
-                    {activeModel.provider}
-                  </Text>
-                  {(() => {
-                    const rank = allModels.findIndex((model) => model.id === activeModel.id);
-                    if (rank === -1) return null;
-                    return (
-                      <Text fontSize={11} color="$textMuted">
-                        Leaderboard rank #{rank + 1}
+              <Text fontSize={14} fontWeight="600" color={colors.accent}>
+                Selected Models:
+              </Text>
+              {Array.from(selectedIds).map((id) => {
+                const model = allModels.find((m) => m.id === id);
+                if (!model) return null;
+                return (
+                  <XStack
+                    key={id}
+                    alignItems="center"
+                    gap="$xs"
+                    paddingHorizontal="$sm"
+                    paddingVertical="$xs"
+                    backgroundColor={isDark ? "rgba(0,0,0,0.3)" : "rgba(255,255,255,0.5)"}
+                    borderRadius="$full"
+                  >
+                    <Text fontSize={14} color={getProviderIcon(model.provider)}>
+                      {getProviderIcon(model.provider)}
+                    </Text>
+                    <Text fontSize={13} fontWeight="500" color={colors.text}>
+                      {model.name}
+                    </Text>
+                    <Button
+                      size="$1"
+                      backgroundColor="transparent"
+                      borderWidth={0}
+                      padding={0}
+                      onPress={() => toggleSelection(id)}
+                      icon={<X size={14} color={colors.textMuted} />}
+                    />
+                  </XStack>
+                );
+              })}
+              <Button
+                size="$2"
+                backgroundColor="transparent"
+                borderWidth={0}
+                color={colors.red}
+                onPress={() => setSelectedIds(new Set())}
+              >
+                Clear all
+              </Button>
+            </XStack>
+          )}
+
+          {/* Controls */}
+          <XStack
+            gap="$md"
+            marginBottom="$lg"
+            flexWrap="wrap"
+            alignItems="center"
+            justifyContent="space-between"
+          >
+            <XStack gap="$sm" flex={1} minWidth={280}>
+              <XStack
+                flex={1}
+                alignItems="center"
+                gap="$xs"
+                paddingHorizontal="$md"
+                paddingVertical="$sm"
+                backgroundColor={colors.bgTertiary}
+                borderRadius="$md"
+                borderWidth={1}
+                borderColor={colors.border}
+              >
+                <Search size={18} color={colors.textMuted} />
+                <Input
+                  flex={1}
+                  backgroundColor="transparent"
+                  borderWidth={0}
+                  color={colors.text}
+                  placeholder="Search models..."
+                  placeholderTextColor={colors.textSecondary}
+                  fontSize={14}
+                  padding="$xs"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+                {searchQuery && (
+                  <Button
+                    size="$1"
+                    backgroundColor="transparent"
+                    borderWidth={0}
+                    onPress={() => setSearchQuery("")}
+                    icon={<X size={16} color={colors.textMuted} />}
+                  />
+                )}
+              </XStack>
+
+              {/* Filter Dropdown */}
+              <YStack position="relative">
+                <Button
+                  size="$3"
+                  backgroundColor={filterOpen ? colors.text : colors.bgTertiary}
+                  color={filterOpen ? colors.bg : colors.text}
+                  borderWidth={1}
+                  borderColor={activeFiltersCount > 0 ? colors.accent : colors.border}
+                  borderRadius="$md"
+                  onPress={() => setFilterOpen(filterOpen ? null : "providers")}
+                  icon={<Filter size={16} />}
+                >
+                  {`Filters ${activeFiltersCount > 0 ? `(${activeFiltersCount})` : ""}`}
+                </Button>
+
+                {filterOpen && (
+                  <YStack
+                    ref={filterPanelRef}
+                    position="absolute"
+                    top="$lg"
+                    left={0}
+                    zIndex={50}
+                    width={340}
+                    maxHeight={500}
+                    backgroundColor={colors.bgSecondary}
+                    borderRadius="$md"
+                    borderWidth={1}
+                    borderColor={colors.border}
+                    padding="$md"
+                    gap="$lg"
+                    overflow="scroll"
+                  >
+                    {/* Provider Filter */}
+                    <YStack gap="$xs">
+                      <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                        Providers
                       </Text>
-                    );
-                  })()}
-                </YStack>
+                      <XStack flexWrap="wrap" gap="$xs">
+                        {allProviders.map((provider) => (
+                          <Button
+                            key={provider}
+                            size="$2"
+                            backgroundColor={providerFilters.has(provider) ? colors.accent : colors.bgTertiary}
+                            color={providerFilters.has(provider) ? "black" : colors.text}
+                            borderRadius="$full"
+                            onPress={() => {
+                              setProviderFilters((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(provider)) next.delete(provider);
+                                else next.add(provider);
+                                return next;
+                              });
+                            }}
+                          >
+                            {provider}
+                          </Button>
+                        ))}
+                      </XStack>
+                    </YStack>
+
+                    {/* Price Tier Filter */}
+                    <YStack gap="$xs">
+                      <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                        Price Tier
+                      </Text>
+                      <XStack flexWrap="wrap" gap="$xs">
+                        {priceTiers.map((tier) => (
+                          <Button
+                            key={tier}
+                            size="$2"
+                            backgroundColor={priceFilters.has(tier) ? getTierColor(tier) : colors.bgTertiary}
+                            color={priceFilters.has(tier) ? "black" : colors.text}
+                            borderRadius="$full"
+                            onPress={() => {
+                              setPriceFilters((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(tier)) next.delete(tier);
+                                else next.add(tier);
+                                return next;
+                              });
+                            }}
+                          >
+                            {tier.charAt(0).toUpperCase() + tier.slice(1)}
+                          </Button>
+                        ))}
+                      </XStack>
+                    </YStack>
+
+                    {/* Capability Filter */}
+                    <YStack gap="$xs">
+                      <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                        Capabilities
+                      </Text>
+                      <XStack flexWrap="wrap" gap="$xs">
+                        {allCapabilities.map((cap) => (
+                          <Button
+                            key={cap}
+                            size="$2"
+                            backgroundColor={capabilityFilters.has(cap) ? colors.accent : colors.bgTertiary}
+                            color={capabilityFilters.has(cap) ? "black" : colors.text}
+                            borderRadius="$full"
+                            onPress={() => {
+                              setCapabilityFilters((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(cap)) next.delete(cap);
+                                else next.add(cap);
+                                return next;
+                              });
+                            }}
+                          >
+                            {cap}
+                          </Button>
+                        ))}
+                      </XStack>
+                    </YStack>
+
+                    {activeFiltersCount > 0 && (
+                      <Button
+                        size="$2"
+                        backgroundColor="transparent"
+                        borderWidth={0}
+                        color={colors.textMuted}
+                        onPress={clearFilters}
+                      >
+                        Clear all filters
+                      </Button>
+                    )}
+                  </YStack>
+                )}
+              </YStack>
+            </XStack>
+
+            {/* Compare & Save Buttons */}
+            <XStack gap="$sm" alignItems="center">
+              <Text fontSize={13} color={colors.textMuted}>
+                {selectedIds.size} selected
+              </Text>
+              {selectedIds.size > 0 && (
+                <Button
+                  size="$3"
+                  backgroundColor={colors.bgTertiary}
+                  color={colors.text}
+                  borderWidth={1}
+                  borderColor={colors.border}
+                  borderRadius="$md"
+                  onPress={() => setShowSavePreset(true)}
+                  icon={<Sparkles size={16} />}
+                >
+                  Save Preset
+                </Button>
+              )}
+              <Button
+                size="$3"
+                backgroundColor={selectedIds.size >= 2 ? colors.accent : colors.bgTertiary}
+                color={selectedIds.size >= 2 ? "black" : colors.textMuted}
+                borderRadius="$md"
+                disabled={selectedIds.size < 2}
+                onPress={handleCompare}
+                icon={<Layers size={16} />}
+              >
+                Compare in Studio
+              </Button>
+            </XStack>
+          </XStack>
+
+          {/* Leaderboard Table */}
+          <YStack
+            borderWidth={1}
+            borderColor={colors.border}
+            borderRadius="$lg"
+            overflow="hidden"
+            backgroundColor={colors.bgTertiary}
+          >
+            {/* Table Header */}
+            <XStack
+              padding="$md"
+              backgroundColor={colors.bgSecondary}
+              borderBottomWidth={1}
+              borderColor={colors.border}
+            >
+              <XStack flex={1} alignItems="center" gap="$sm">
+                <Text fontSize={12} fontWeight="600" color={colors.textMuted} minWidth={40}>
+                  RANK
+                </Text>
                 <Button
                   size="$2"
                   backgroundColor="transparent"
                   borderWidth={0}
-                  color="$textMuted"
-                  onPress={() => setActiveModelId(null)}
+                  color={sortKey === "name" ? colors.text : colors.textMuted}
+                  fontWeight={sortKey === "name" ? "600" : "400"}
+                  onPress={() => toggleSort("name")}
+                  icon={getSortIcon("name")}
                 >
-                  <X size={16} />
+                  Model
                 </Button>
               </XStack>
 
-              <YStack
-                borderWidth={1}
-                borderColor="$border"
-                borderRadius="$md"
-                padding="$md"
-                backgroundColor="$backgroundSecondary"
-                gap="$xs"
-              >
-                <Text fontSize={12} color="$textMuted">
-                  Overall Score
-                </Text>
-                <Text fontSize={28} fontWeight="700" color="$color">
-                  {getOverallScore(activeModel)}%
-                </Text>
-              </YStack>
+              <XStack flex={1} justifyContent="flex-end" gap="$sm">
+                {[
+                  { key: "overall", label: "Overall", icon: Trophy },
+                  { key: "coding", label: "Coding", icon: Code2 },
+                  { key: "math", label: "Math", icon: Calculator },
+                  { key: "reasoning", label: "Reasoning", icon: Brain },
+                ].map(({ key, label, icon: Icon }) => (
+                  <Button
+                    key={key}
+                    size="$2"
+                    backgroundColor="transparent"
+                    borderWidth={0}
+                    color={sortKey === key ? colors.accent : colors.textMuted}
+                    fontWeight={sortKey === key ? "600" : "400"}
+                    onPress={() => toggleSort(key as SortKey)}
+                    icon={<Icon size={14} color={sortKey === key ? colors.accent : colors.textMuted} />}
+                  >
+                    {label}
+                  </Button>
+                ))}
 
-              <YStack gap="$xs">
-                <Text fontSize={12} color="$textMuted">
-                  Pricing (per 1M tokens)
-                </Text>
-                {(() => {
-                  const pricing = getPricing(activeModel);
-                  return (
-                    <YStack gap={2}>
-                      <Text fontSize={13} color="$color">
-                        Input: {pricing.input}
+                <Button
+                  size="$2"
+                  backgroundColor="transparent"
+                  borderWidth={0}
+                  color={sortKey === "price" ? colors.text : colors.textMuted}
+                  fontWeight={sortKey === "price" ? "600" : "400"}
+                  onPress={() => toggleSort("price")}
+                  icon={getSortIcon("price")}
+                  minWidth={60}
+                >
+                  Price
+                </Button>
+              </XStack>
+            </XStack>
+
+            {/* Table Rows */}
+            <YStack maxHeight={600} overflow="scroll">
+              {modelRows.map((row) => (
+                <XStack
+                  key={row.id}
+                  padding="$md"
+                  backgroundColor={row.isSelected ? colors.accentBg : "transparent"}
+                  borderBottomWidth={1}
+                  borderColor={colors.border}
+                  hoverStyle={{ backgroundColor: row.isSelected ? colors.accentBg : colors.bgSecondary }}
+                  onPress={() => setActiveModelId(row.id)}
+                >
+                  {/* Rank & Selection */}
+                  <XStack flex={1} alignItems="center" gap="$md">
+                    <XStack minWidth={40} alignItems="center" gap="$xs">
+                      <Text fontSize={16} fontWeight="700" color={row.rank <= 3 ? colors.gold : colors.textMuted}>
+                        {`#${row.rank}`}
                       </Text>
-                      <Text fontSize={13} color="$color">
-                        Output: {pricing.output}
+                      {row.rank <= 3 && <Trophy size={14} color={colors.gold} />}
+                    </XStack>
+
+                    <Button
+                      size="$2"
+                      backgroundColor={row.isSelected ? colors.accent : "transparent"}
+                      borderWidth={1}
+                      borderColor={row.isSelected ? colors.accent : colors.border}
+                      borderRadius="$sm"
+                      width={32}
+                      height={32}
+                      padding={0}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        toggleSelection(row.id);
+                      }}
+                    >
+                      {row.isSelected && <Check size={16} color="black" />}
+                    </Button>
+
+                    <YStack>
+                      <XStack alignItems="center" gap="$xs">
+                        <Text fontSize={14} color={colors.textMuted}>
+                          {getProviderIcon(row.model.provider)}
+                        </Text>
+                        <Text fontSize={15} fontWeight="600" color={colors.text}>
+                          {row.model.name}
+                        </Text>
+                        {row.model.type === "Router" && (
+                          <Text 
+                            fontSize={11} 
+                            color={colors.accent} 
+                            backgroundColor={isDark ? "rgba(34, 197, 94, 0.2)" : "rgba(34, 197, 94, 0.1)"}
+                            paddingHorizontal="$xs" 
+                            paddingVertical={2} 
+                            borderRadius="$sm"
+                          >
+                            Router
+                          </Text>
+                        )}
+                      </XStack>
+                      <Text fontSize={12} color={colors.textSecondary}>
+                        {`${row.model.provider} • ${row.model.speed} • ${row.capabilities.slice(0, 3).join(", ")}`}
                       </Text>
                     </YStack>
-                  );
-                })()}
-              </YStack>
+                  </XStack>
 
-              <YStack gap="$xs">
-                <Text fontSize={12} color="$textMuted">
-                  Capabilities
-                </Text>
-                <XStack gap="$xs" flexWrap="wrap">
-                  {getCapabilities(activeModel).map((capability) => (
-                    <Text
-                      key={`${activeModel.id}-${capability}`}
-                      fontSize={11}
-                      color="$color"
-                      borderWidth={1}
-                      borderColor="$border"
-                      borderRadius="$full"
-                      paddingHorizontal="$sm"
-                      paddingVertical={4}
-                    >
-                      {capability}
-                    </Text>
-                  ))}
+                  {/* Scores */}
+                  <XStack flex={1} justifyContent="flex-end" gap="$sm" alignItems="center">
+                    {[
+                      { score: row.scores.overall, color: row.scores.overall >= 90 ? colors.accent : colors.textMuted },
+                      { score: row.scores.coding, color: row.scores.coding >= 90 ? colors.accent : colors.textMuted },
+                      { score: row.scores.math, color: row.scores.math >= 90 ? colors.accent : colors.textMuted },
+                      { score: row.scores.reasoning, color: row.scores.reasoning >= 90 ? colors.accent : colors.textMuted },
+                    ].map(({ score, color }, idx) => (
+                      <YStack key={idx} minWidth={70} alignItems="center">
+                        <Text fontSize={15} fontWeight="700" color={color}>
+                          {score}
+                        </Text>
+                        <YStack
+                          height={4}
+                          width={40}
+                          backgroundColor={colors.border}
+                          borderRadius="$full"
+                          overflow="hidden"
+                        >
+                          <YStack
+                            height="100%"
+                            width={`${score}%`}
+                            backgroundColor={color}
+                          />
+                        </YStack>
+                      </YStack>
+                    ))}
+
+                    <YStack minWidth={60} alignItems="center">
+                      <Text 
+                        fontSize={14} 
+                        color={getTierColor(row.pricing.tier)}
+                        fontWeight="500"
+                      >
+                        {`$${row.pricing.input}`}
+                      </Text>
+                    </YStack>
+                  </XStack>
                 </XStack>
-              </YStack>
+              ))}
+            </YStack>
 
-              <YStack gap="$xs" flex={1}>
-                <Text fontSize={12} color="$textMuted">
-                  Category scores
+            {modelRows.length === 0 && (
+              <YStack padding="$xl" alignItems="center" gap="$md">
+                <Search size={48} color={colors.border} />
+                <Text fontSize={16} color={colors.textMuted}>
+                  No models match your filters
                 </Text>
-                <YStack
-                  gap="$xs"
-                  flex={1}
-                  borderWidth={1}
-                  borderColor="$border"
-                  borderRadius="$md"
-                  padding="$sm"
-                  backgroundColor="$backgroundSecondary"
-                  overflow="scroll"
-                  maxHeight={isNarrow ? "100%" : 220}
-                >
-                  {getCategoryScores(activeModel, getOverallScore(activeModel)).map((item) => (
-                    <XStack key={`${activeModel.id}-${item.label}`} justifyContent="space-between">
-                      <Text fontSize={12} color="$color">
-                        {item.label}
-                      </Text>
-                      <Text fontSize={12} color="$textMuted">
-                        {item.score}%
-                      </Text>
-                    </XStack>
-                  ))}
-                </YStack>
-              </YStack>
-
-              <YStack
-                gap="$sm"
-                paddingTop="$sm"
-                borderTopWidth={1}
-                borderColor="$border"
-                backgroundColor="$background"
-                position="sticky"
-                bottom={0}
-              >
                 <Button
                   size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  onPress={() => handleDeployToStudio(activeModel.id)}
+                  backgroundColor={colors.bgTertiary}
+                  color={colors.text}
+                  onPress={clearFilters}
                 >
-                  Deploy to Studio
+                  Clear filters
                 </Button>
+              </YStack>
+            )}
+          </YStack>
+
+          {/* Footer Info */}
+          <XStack marginTop="$lg" justifyContent="space-between" alignItems="flex-start">
+            <YStack gap="$xs" maxWidth={400}>
+              <XStack alignItems="center" gap="$xs">
+                <Info size={14} color={colors.textMuted} />
+                <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                  About Scores
+                </Text>
+              </XStack>
+              <Text fontSize={12} color={colors.textSecondary} lineHeight={1.5}>
+                Scores are benchmark ratings from 0-100 based on standardized tests. 
+                Higher scores indicate better performance. Click any model for detailed insights.
+              </Text>
+            </YStack>
+
+            <Text fontSize={12} color={colors.textSecondary}>
+              {`Showing ${modelRows.length} of ${allModels.length} models`}
+            </Text>
+          </XStack>
+        </YStack>
+
+        {/* Right Slide-out: Model Detail Panel */}
+        {/* Save Preset Modal */}
+        {showSavePreset && (
+          <>
+            {/* Backdrop */}
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: isDark ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.4)",
+                zIndex: 200,
+              }}
+              onClick={() => setShowSavePreset(false)}
+            />
+            
+            {/* Modal */}
+            <div
+              style={{
+                position: "fixed",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: 400,
+                backgroundColor: colors.bgSecondary,
+                border: `1px solid ${colors.border}`,
+                borderRadius: 12,
+                zIndex: 201,
+                padding: 24,
+              }}
+            >
+              <YStack gap="$md">
+                <XStack justifyContent="space-between" alignItems="center">
+                  <Text fontSize={18} fontWeight="600" color={colors.text}>
+                    Save Model Preset
+                  </Text>
+                  <Button
+                    size="$2"
+                    backgroundColor="transparent"
+                    borderWidth={0}
+                    onPress={() => setShowSavePreset(false)}
+                    icon={<X size={18} color={colors.textMuted} />}
+                  />
+                </XStack>
+                
+                <Text fontSize={13} color={colors.textMuted}>
+                  Save {selectedIds.size} model{selectedIds.size > 1 ? "s" : ""} as a preset for quick access in Studio.
+                </Text>
+                
+                <YStack gap="$xs">
+                  <Text fontSize={12} color={colors.textMuted}>Preset Name</Text>
+                  <Input
+                    value={presetName}
+                    onChangeText={setPresetName}
+                    placeholder="e.g., Coding Stack, Research Team..."
+                    borderColor={colors.border}
+                    backgroundColor={colors.bg}
+                    color={colors.text}
+                    placeholderTextColor={colors.textSecondary}
+                    fontSize={14}
+                  />
+                </YStack>
+                
+                <YStack gap="$xs">
+                  <Text fontSize={12} color={colors.textMuted}>Subject</Text>
+                  <XStack gap="$xs" flexWrap="wrap">
+                    {["General", "Mathematics", "Physics", "Computer Science", "Writing", "History", "Business", "Creative"].map((subject) => {
+                      const isActive = presetSubject === subject;
+                      return (
+                        <Button
+                          key={subject}
+                          size="$2"
+                          backgroundColor={isActive ? colors.accent : colors.bgTertiary}
+                          color={isActive ? "black" : colors.text}
+                          borderWidth={1}
+                          borderColor={isActive ? colors.accent : colors.border}
+                          borderRadius="$full"
+                          onPress={() => setPresetSubject(subject)}
+                        >
+                          {subject}
+                        </Button>
+                      );
+                    })}
+                  </XStack>
+                </YStack>
+                
+                <XStack gap="$sm" marginTop="$sm">
+                  <Button
+                    flex={1}
+                    size="$3"
+                    backgroundColor="transparent"
+                    borderWidth={1}
+                    borderColor={colors.border}
+                    color={colors.text}
+                    onPress={() => setShowSavePreset(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    flex={1}
+                    size="$3"
+                    backgroundColor={colors.accent}
+                    color="black"
+                    onPress={handleSavePreset}
+                    disabled={!presetName.trim()}
+                  >
+                    Save Preset
+                  </Button>
+                </XStack>
+              </YStack>
+            </div>
+          </>
+        )}
+
+        {activeModel && (
+          <>
+            {/* Backdrop */}
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: isDark ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.4)",
+                zIndex: 100,
+              }}
+              onClick={() => setActiveModelId(null)}
+            />
+            
+            {/* Panel */}
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                width: 480,
+                backgroundColor: colors.bgSecondary,
+                borderLeft: `1px solid ${colors.border}`,
+                zIndex: 101,
+                overflow: "auto",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              {/* Panel Header */}
+              <XStack
+                padding="$lg"
+                borderBottomWidth={1}
+                borderColor={colors.border}
+                justifyContent="space-between"
+                alignItems="flex-start"
+                backgroundColor={colors.bgTertiary}
+              >
+                <YStack gap="$xs" flex={1}>
+                  <XStack alignItems="center" gap="$sm">
+                    <Text fontSize={24} color={colors.textMuted}>
+                      {getProviderIcon(activeModel.model.provider)}
+                    </Text>
+                    <Text fontSize={24} fontWeight="700" color={colors.text}>
+                      {activeModel.model.name}
+                    </Text>
+                  </XStack>
+                  <XStack alignItems="center" gap="$sm">
+                    <Text fontSize={14} color={colors.textMuted}>
+                      {activeModel.model.provider}
+                    </Text>
+                    <Text fontSize={12} color={colors.textSecondary}>
+                      {`• Released ${activeModel.releaseDate}`}
+                    </Text>
+                  </XStack>
+                </YStack>
                 <Button
                   size="$3"
                   backgroundColor="transparent"
-                  borderWidth={1}
-                  borderColor="$border"
-                  color="$color"
-                  onPress={() => toggleSelection(activeModel.id)}
-                >
-                  {selectedIds.has(activeModel.id) ? "Remove from Compare" : "Add to Compare"}
-                </Button>
-              </YStack>
-            </YStack>
-          )}
-        </XStack>
+                  borderWidth={0}
+                  color={colors.textMuted}
+                  onPress={() => setActiveModelId(null)}
+                  icon={<X size={24} />}
+                />
+              </XStack>
 
-      </YStack>
+              <YStack padding="$lg" gap="$xl">
+                {/* Description */}
+                <Text fontSize={15} color={colors.textMuted} lineHeight={1.6}>
+                  {activeModel.description}
+                </Text>
+
+                {/* Overall Score Card */}
+                <YStack
+                  backgroundColor={colors.bgTertiary}
+                  borderRadius="$lg"
+                  padding="$lg"
+                  borderWidth={1}
+                  borderColor={colors.border}
+                >
+                  <XStack alignItems="center" gap="$sm" marginBottom="$md">
+                    <Award size={20} color={colors.gold} />
+                    <Text fontSize={16} fontWeight="600" color={colors.text}>
+                      Performance Scores
+                    </Text>
+                  </XStack>
+                  
+                  <XStack gap="$lg" flexWrap="wrap">
+                    {Object.entries(activeModel.scores).map(([key, score]) => (
+                      <YStack key={key} alignItems="center" gap="$xs" minWidth={80}>
+                        <Text fontSize={28} fontWeight="800" color={score >= 90 ? colors.accent : score >= 80 ? colors.gold : colors.textMuted}>
+                          {score}
+                        </Text>
+                        <Text fontSize={11} color={colors.textSecondary} textTransform="capitalize">
+                          {key.replace(/([A-Z])/g, " $1").trim()}
+                        </Text>
+                        <YStack
+                          height={6}
+                          width={60}
+                          backgroundColor={colors.border}
+                          borderRadius="$full"
+                          overflow="hidden"
+                        >
+                          <YStack
+                            height="100%"
+                            width={`${score}%`}
+                            backgroundColor={score >= 90 ? colors.accent : score >= 80 ? colors.gold : colors.textSecondary}
+                          />
+                        </YStack>
+                      </YStack>
+                    ))}
+                  </XStack>
+                </YStack>
+
+                {/* Pricing Section */}
+                <YStack gap="$md">
+                  <XStack alignItems="center" gap="$sm">
+                    <DollarSign size={18} color={colors.accent} />
+                    <Text fontSize={16} fontWeight="600" color={colors.text}>
+                      Pricing
+                    </Text>
+                    <Text 
+                      fontSize={12} 
+                      color={getTierColor(activeModel.pricing.tier)}
+                      backgroundColor={isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.05)"}
+                      paddingHorizontal="$sm"
+                      paddingVertical={2}
+                      borderRadius="$sm"
+                      textTransform="uppercase"
+                      fontWeight="600"
+                    >
+                      {activeModel.pricing.tier}
+                    </Text>
+                  </XStack>
+                  
+                  <XStack gap="$md">
+                    <YStack flex={1} backgroundColor={colors.bgTertiary} borderRadius="$md" padding="$md" borderWidth={1} borderColor={colors.border}>
+                      <Text fontSize={12} color={colors.textSecondary}>Input</Text>
+                      <Text fontSize={20} fontWeight="700" color={colors.text}>
+                        {`$${activeModel.pricing.input}`}
+                      </Text>
+                      <Text fontSize={11} color={colors.textSecondary}>per 1M tokens</Text>
+                    </YStack>
+                    <YStack flex={1} backgroundColor={colors.bgTertiary} borderRadius="$md" padding="$md" borderWidth={1} borderColor={colors.border}>
+                      <Text fontSize={12} color={colors.textSecondary}>Output</Text>
+                      <Text fontSize={20} fontWeight="700" color={colors.text}>
+                        {`$${activeModel.pricing.output}`}
+                      </Text>
+                      <Text fontSize={11} color={colors.textSecondary}>per 1M tokens</Text>
+                    </YStack>
+                  </XStack>
+                </YStack>
+
+                {/* Benchmarks */}
+                <YStack gap="$md">
+                  <XStack alignItems="center" gap="$sm">
+                    <BarChart3 size={18} color={colors.blue} />
+                    <Text fontSize={16} fontWeight="600" color={colors.text}>
+                      Benchmarks
+                    </Text>
+                  </XStack>
+                  
+                  <YStack gap="$sm">
+                    {activeModel.benchmarks.map((bench) => (
+                      <XStack
+                        key={bench.name}
+                        justifyContent="space-between"
+                        alignItems="center"
+                        padding="$md"
+                        backgroundColor={colors.bgTertiary}
+                        borderRadius="$md"
+                        borderWidth={1}
+                        borderColor={colors.border}
+                      >
+                        <YStack>
+                          <Text fontSize={14} fontWeight="600" color={colors.text}>
+                            {bench.name}
+                          </Text>
+                          <Text fontSize={12} color={colors.textSecondary}>
+                            {`Top ${100 - bench.percentile}th percentile`}
+                          </Text>
+                        </YStack>
+                        <XStack alignItems="center" gap="$sm">
+                          <Text fontSize={18} fontWeight="700" color={bench.score >= 80 ? colors.accent : colors.gold}>
+                            {`${bench.score}%`}
+                          </Text>
+                        </XStack>
+                      </XStack>
+                    ))}
+                  </YStack>
+                </YStack>
+
+                {/* Performance Metrics */}
+                <YStack gap="$md">
+                  <XStack alignItems="center" gap="$sm">
+                    <Gauge size={18} color={colors.red} />
+                    <Text fontSize={16} fontWeight="600" color={colors.text}>
+                      Performance
+                    </Text>
+                  </XStack>
+                  
+                  <YStack gap="$sm">
+                    <XStack justifyContent="space-between" padding="$md" backgroundColor={colors.bgTertiary} borderRadius="$md">
+                      <XStack alignItems="center" gap="$xs">
+                        <Clock size={14} color={colors.textMuted} />
+                        <Text fontSize={14} color={colors.textMuted}>Avg Latency</Text>
+                      </XStack>
+                      <Text fontSize={14} fontWeight="600" color={colors.text}>
+                        {formatLatency(activeModel.latency.avg)}
+                      </Text>
+                    </XStack>
+                    
+                    <XStack justifyContent="space-between" padding="$md" backgroundColor={colors.bgTertiary} borderRadius="$md">
+                      <XStack alignItems="center" gap="$xs">
+                        <Zap size={14} color={colors.textMuted} />
+                        <Text fontSize={14} color={colors.textMuted}>Throughput</Text>
+                      </XStack>
+                      <Text fontSize={14} fontWeight="600" color={colors.text}>
+                        {`${activeModel.throughput.tokensPerSecond} tok/s`}
+                      </Text>
+                    </XStack>
+                    
+                    <XStack justifyContent="space-between" padding="$md" backgroundColor={colors.bgTertiary} borderRadius="$md">
+                      <XStack alignItems="center" gap="$xs">
+                        <TrendingUp size={14} color={colors.textMuted} />
+                        <Text fontSize={14} color={colors.textMuted}>Context Window</Text>
+                      </XStack>
+                      <Text fontSize={14} fontWeight="600" color={colors.text}>
+                        {`${formatNumber(activeModel.contextWindow)} tokens`}
+                      </Text>
+                    </XStack>
+                  </YStack>
+                </YStack>
+
+                {/* Capabilities */}
+                <YStack gap="$md">
+                  <Text fontSize={16} fontWeight="600" color={colors.text}>
+                    Capabilities
+                  </Text>
+                  <XStack flexWrap="wrap" gap="$xs">
+                    {activeModel.capabilities.map((cap) => (
+                      <Text
+                        key={cap}
+                        fontSize={12}
+                        color={colors.accent}
+                        backgroundColor={isDark ? "rgba(34, 197, 94, 0.15)" : "rgba(34, 197, 94, 0.1)"}
+                        paddingHorizontal="$sm"
+                        paddingVertical={6}
+                        borderRadius="$md"
+                        textTransform="capitalize"
+                      >
+                        {cap.replace(/-/g, " ")}
+                      </Text>
+                    ))}
+                  </XStack>
+                </YStack>
+
+                {/* Strengths & Weaknesses */}
+                <XStack gap="$md">
+                  <YStack flex={1} gap="$sm">
+                    <Text fontSize={14} fontWeight="600" color={colors.accent}>
+                      Strengths
+                    </Text>
+                    {activeModel.strengths.slice(0, 3).map((s) => (
+                      <XStack key={s} alignItems="center" gap="$xs">
+                        <Check size={12} color={colors.accent} />
+                        <Text fontSize={13} color={colors.textMuted}>{s}</Text>
+                      </XStack>
+                    ))}
+                  </YStack>
+                  
+                  <YStack flex={1} gap="$sm">
+                    <Text fontSize={14} fontWeight="600" color={colors.red}>
+                      Weaknesses
+                    </Text>
+                    {activeModel.weaknesses.slice(0, 3).map((w) => (
+                      <XStack key={w} alignItems="center" gap="$xs">
+                        <X size={12} color={colors.red} />
+                        <Text fontSize={13} color={colors.textSecondary}>{w}</Text>
+                      </XStack>
+                    ))}
+                  </YStack>
+                </XStack>
+
+                {/* Actions */}
+                <XStack gap="$md" marginTop="$md">
+                  <Button
+                    flex={1}
+                    size="$4"
+                    backgroundColor={selectedIds.has(activeModel.id) ? colors.red : colors.accent}
+                    color="black"
+                    borderRadius="$md"
+                    fontWeight="600"
+                    onPress={() => toggleSelection(activeModel.id)}
+                    icon={selectedIds.has(activeModel.id) ? <X size={18} /> : <Check size={18} />}
+                  >
+                    {selectedIds.has(activeModel.id) ? "Remove from Compare" : "Add to Compare"}
+                  </Button>
+                  
+                  <Button
+                    flex={1}
+                    size="$4"
+                    backgroundColor={colors.blue}
+                    color="white"
+                    borderRadius="$md"
+                    fontWeight="600"
+                    onPress={() => router.push(`/studio?stack=${activeModel.id}`)}
+                    icon={<Sparkles size={18} />}
+                  >
+                    Try in Studio
+                  </Button>
+                </XStack>
+              </YStack>
+            </div>
+          </>
+        )}
+      </XStack>
     </YStack>
+  );
+}
+
+export default function ModelsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, textAlign: "center" }}>Loading Model Hub...</div>}>
+      <ModelHubContent />
+    </Suspense>
   );
 }

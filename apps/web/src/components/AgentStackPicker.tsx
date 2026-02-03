@@ -160,7 +160,7 @@ export default function AgentStackPicker({
   const [activeIndex, setActiveIndex] = useState(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const searchRef = useRef<HTMLInputElement | null>(null);
+  const searchRef = useRef<any>(null);
 
   const isDefault = selectedIds.length < 2;
 
@@ -361,7 +361,6 @@ export default function AgentStackPicker({
           borderRadius="$md"
           backgroundColor="$background"
           overflow="hidden"
-          onKeyDown={handleKeyDown}
         >
           <YStack padding="$sm" borderBottomWidth={1} borderColor="$border" gap="$sm">
             <XStack alignItems="center" gap="$xs">
@@ -380,7 +379,7 @@ export default function AgentStackPicker({
             </XStack>
           </YStack>
 
-          <YStack flex={1} overflowY="auto" padding="$sm" gap="$lg">
+          <YStack flex={1} overflow="scroll" padding="$sm" gap="$lg">
             <YStack gap="$xs">
               <SectionHeader icon={<Zap size={14} color="#22C55E" />} title="Quick Agents" />
               <YStack gap="$xs">

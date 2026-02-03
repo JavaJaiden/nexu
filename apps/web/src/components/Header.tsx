@@ -1,20 +1,22 @@
 "use client";
 
-import { useUser, SignOutButton } from "@clerk/nextjs";
+import { useUser, SignOutButton, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Button, Text, XStack, YStack, Avatar } from "tamagui";
-import { LogOut, Moon, Sun } from "lucide-react";
+import { FlaskConical, LayoutDashboard, Moon, Sun, Database, LogOut } from "lucide-react";
 import { useThemeSetting } from "@/lib/themeContext";
 
 export default function Header() {
-  const { user } = useUser();
+  const { user, isLoaded } = useUser();
+  const { isSignedIn } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, setTheme } = useThemeSetting();
   const navItems = [
-    { label: "Studio", href: "/studio" },
-    { label: "Model Hub", href: "/models" },
-    { label: "Laboratory", href: "/lab" },
+    { label: "Studio", href: "/studio", icon: LayoutDashboard },
+    { label: "Model Hub", href: "/models", icon: Database },
+    { label: "Laboratory", href: "/lab", icon: FlaskConical },
   ];
 
   return (
@@ -37,21 +39,42 @@ export default function Header() {
         <XStack alignItems="center" gap="$md" display="flex" flexWrap="wrap">
           {navItems.map((item) => {
             const isActive = pathname === item.href;
+            const Icon = item.icon;
             return (
               <Link key={item.href} href={item.href}>
-                <Text
-                  fontSize={14}
-                  fontWeight={isActive ? "600" : "400"}
-                  color={isActive ? "$color" : "$textMuted"}
+                <XStack
+                  alignItems="center"
+                  gap="$xs"
                 >
-                  {item.label}
-                </Text>
+                  <Icon size={16} />
+                  <Text
+                    fontSize={14}
+                    fontWeight={isActive ? "600" : "400"}
+                    color={isActive ? "$color" : "$textMuted"}
+                  >
+                    {item.label}
+                  </Text>
+                </XStack>
               </Link>
             );
           })}
         </XStack>
 
-        {user ? (
+        {!isLoaded ? (
+          // Loading state - show minimal header
+          <XStack gap="$sm">
+            <Button
+              size="$3"
+              backgroundColor="transparent"
+              borderWidth={1}
+              borderColor="$border"
+              borderRadius="$sm"
+              onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
+            </Button>
+          </XStack>
+        ) : isSignedIn ? (
           <>
             {pathname !== "/studio" && (
               <Link href="/studio">
@@ -77,9 +100,9 @@ export default function Header() {
               {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
             </Button>
             <XStack alignItems="center" gap="$sm">
-              {user.imageUrl ? (
+              {user?.imageUrl ? (
                 <Avatar circular size="$3">
-                  <Avatar.Image src={user.imageUrl} />
+                  <Avatar.Image src={user?.imageUrl} />
                   <Avatar.Fallback backgroundColor="$backgroundSecondary" />
                 </Avatar>
               ) : (
@@ -92,7 +115,7 @@ export default function Header() {
                   justifyContent="center"
                 >
                   <Text fontSize={14} fontWeight="500" color="$color">
-                    {user.firstName?.[0] || "U"}
+                    {user?.firstName?.[0] || "U"}
                   </Text>
                 </YStack>
               )}
@@ -120,7 +143,7 @@ export default function Header() {
             >
               {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
             </Button>
-            <Link href="/studio">
+            <Link href="/sign-in">
               <Button
                 size="$3"
                 backgroundColor="transparent"
@@ -133,7 +156,7 @@ export default function Header() {
                 Sign in
               </Button>
             </Link>
-            <Link href="/studio">
+            <Link href="/sign-up">
               <Button
                 size="$3"
                 backgroundColor="$color"

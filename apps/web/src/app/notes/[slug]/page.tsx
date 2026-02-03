@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 
-export default function NotesSlugRedirect({
+export default async function NotesSlugRedirect({
   params,
 }: {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }) {
-  redirect(`/studio?project=${params.slug}`);
+  const { slug } = await params;
+  redirect(`/studio?project=${slug}`);
 }
