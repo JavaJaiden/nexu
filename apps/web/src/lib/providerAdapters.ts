@@ -3,6 +3,8 @@ export type RunModelInput = {
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   mode?: "fast" | "deep";
   stepsMode?: "brief" | "detailed";
+  temperature?: number;
+  maxTokens?: number;
   signal?: AbortSignal;
   attachments?: Array<{ name: string; type: string; data: string }>;
 };
@@ -25,19 +27,33 @@ export async function runModel({
   messages,
   mode = "fast",
   stepsMode = "brief",
+  temperature,
+  maxTokens,
   signal,
   attachments,
 }: RunModelInput): Promise<RunModelOutput> {
-  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const normalizedMessages = Array.isArray(messages)
+    ? messages
+        .filter((message) => message && typeof message.content === "string")
+        .map((message) => ({
+          role: message.role,
+          content: message.content.trim(),
+        }))
+        .filter((message) => message.content.length > 0)
+    : [];
+  const lastUser = [...normalizedMessages].reverse().find((message) => message.role === "user");
   const question = lastUser?.content ?? "";
   const response = await fetch("/api/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       question,
+      messages: normalizedMessages,
       models: [modelId],
       mode,
       stepsMode,
+      temperature,
+      maxTokens,
       attachments,
     }),
     signal,
@@ -156,6 +172,8 @@ export async function runAggregator(params: {
   question: string;
   results: Array<{ modelId: string; text: string }>;
   aggregatorModel?: string;
+  temperature?: number;
+  maxTokens?: number;
   attachments?: Array<{ name: string; type: string; data: string }>;
 }): Promise<AggregatedResult> {
   try {
@@ -169,6 +187,8 @@ export async function runAggregator(params: {
           final: result.text,
         })),
         aggregatorModel: params.aggregatorModel,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
         attachments: params.attachments,
       }),
     });

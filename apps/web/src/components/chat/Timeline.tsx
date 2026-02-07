@@ -20,6 +20,11 @@ export default function Timeline({
   onCompareRun,
   onToggleRunIndividual,
   onCopyModel,
+  onCopyAggregated,
+  onRetryModel,
+  onRetryAll,
+  onBranchModel,
+  onBranchAggregated,
 }: TimelineProps) {
   // Build a map of finalized snapshots by message ID
   const finalizedSnapshotsByMessage = useMemo(() => {
@@ -129,18 +134,23 @@ export default function Timeline({
 
           return (
             <YStack key={run.id} gap="$sm" width="100%">
-            <RunPanel
-              run={run}
-              modelNameMap={modelNameMap}
-              showSteps={showSteps}
-              showCitations={showCitations}
-              onCompare={() => onCompareRun(run.id)}
-              onToggleIndividual={() => onToggleRunIndividual(run.id)}
-              onCopy={(modelId) => onCopyModel(run.id, modelId)}
-            />
-          </YStack>
-        );
-      }
+              <RunPanel
+                run={run}
+                modelNameMap={modelNameMap}
+                showSteps={showSteps}
+                showCitations={showCitations}
+                onCompare={() => onCompareRun(run.id)}
+                onToggleIndividual={() => onToggleRunIndividual(run.id)}
+                onCopy={(modelId) => onCopyModel(run.id, modelId)}
+                onCopyAggregated={() => onCopyAggregated(run.id)}
+                onRetryModel={(modelId) => onRetryModel(run.id, modelId)}
+                onRetryAll={() => onRetryAll(run.id)}
+                onBranchModel={(modelId) => onBranchModel(run.id, modelId)}
+                onBranchAggregated={() => onBranchAggregated(run.id)}
+              />
+            </YStack>
+          );
+        }
 
         return null;
       })}

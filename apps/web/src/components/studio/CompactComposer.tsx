@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Text, TextArea, XStack, YStack } from "tamagui";
-import { Plus, Send, X } from "lucide-react";
+import { Plus, Send, X, Mic, MicOff } from "lucide-react";
 import ComposerActionMenu from "@/components/studio/ComposerActionMenu";
 import type { PdfAttachment } from "@/lib/externalContext";
+import { useSpeechDictation } from "@/lib/useSpeechDictation";
 
 type CompactComposerProps = {
   value: string;
@@ -48,6 +49,7 @@ export default function CompactComposer({
   const [menuOpen, setMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textAreaRef = useRef<any>(null);
+  const valueRef = useRef(value);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const actionButtonRef = useRef<any>(null);
 
@@ -58,6 +60,39 @@ export default function CompactComposer({
     const nextHeight = Math.min(el.scrollHeight, MAX_HEIGHT);
     el.style.height = `${nextHeight}px`;
   }, [value]);
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  const appendDictationText = useCallback(
+    (spokenText: string) => {
+      const current = valueRef.current ?? "";
+      const separator = current.trim().length === 0 || /\s$/.test(current) ? "" : " ";
+      onChange(`${current}${separator}${spokenText}`);
+    },
+    [onChange]
+  );
+
+  const {
+    isSupported: supportsDictation,
+    isListening: isDictating,
+    toggle: toggleDictation,
+    stop: stopDictation,
+  } = useSpeechDictation({ onText: appendDictationText });
+
+  useEffect(() => {
+    if (!isBusy && !isDictating) return;
+    if (!isBusy) return;
+    stopDictation();
+  }, [isBusy, isDictating, stopDictation]);
+
+  const handleSendPress = useCallback(() => {
+    if (isDictating) {
+      stopDictation();
+    }
+    onSend();
+  }, [isDictating, stopDictation, onSend]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -119,6 +154,20 @@ export default function CompactComposer({
           />
         </YStack>
 
+        <Button
+          size="$3"
+          backgroundColor={isDictating ? "$backgroundSecondary" : "transparent"}
+          borderWidth={1}
+          borderColor="$border"
+          color={isDictating ? "$color" : "$textMuted"}
+          borderRadius="$full"
+          onPress={toggleDictation}
+          disabled={isBusy || !supportsDictation}
+          opacity={isBusy || !supportsDictation ? 0.5 : 1}
+          icon={isDictating ? <MicOff size={16} color="currentColor" /> : <Mic size={16} color="currentColor" />}
+          hoverStyle={{ borderColor: "$color" }}
+        />
+
         <YStack flex={1}>
           <TextArea
             ref={textAreaRef}
@@ -176,7 +225,7 @@ export default function CompactComposer({
             color={isBusy ? "$background" : "$background"}
             borderRadius="$sm"
             icon={isBusy ? <X size={16} color="#fff" /> : <Send size={16} color="#fff" />}
-            onPress={isBusy ? onStop : onSend}
+            onPress={isBusy ? onStop : handleSendPress}
           >
             {isBusy ? "Stop" : "Send"}
           </Button>

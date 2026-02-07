@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useId, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { H1, Paragraph, Text, XStack, YStack, Button, Input } from "tamagui";
 import { Plus, ChevronLeft, ChevronRight, Settings2, ChevronDown, X, Layers, Sparkles } from "lucide-react";
@@ -22,34 +22,44 @@ import { getModelHubCards, getModelNameMap, type ModelCard } from "@/lib/modelCa
 import type { ChatEntry } from "@/components/chat";
 import type { Message } from "ai";
 
+type HistoryViewFilter = "single" | "multi" | "presets";
+const HISTORY_PAGE_SIZE = 3;
+
+function isMultiModelProject(project: HistoryEntry) {
+  return project.models.length > 1 || project.subject === "Model Hub Compare";
+}
+
 function StudioPageContent() {
   // Theme
   const { theme } = useThemeSetting();
   const isDark = theme === "dark";
   
   // Theme colors
-  const colors = useMemo(() => ({
-    bg: isDark ? "#0a0a0b" : "#ffffff",
-    bgSecondary: isDark ? "#141415" : "#f8f9fa",
-    bgTertiary: isDark ? "#1a1a1b" : "#f1f3f5",
-    border: isDark ? "#2a2a2b" : "#e9ecef",
-    text: isDark ? "#ffffff" : "#111827",
-    textMuted: isDark ? "#9CA3AF" : "#6b7280",
-    textSecondary: isDark ? "#6b7280" : "#9ca3af",
-    accent: "#22C55E",
-  }), [isDark]);
+  const colors = useMemo(
+    () => ({
+      bg: "var(--app-bg, var(--background))",
+      bgSecondary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      bgTertiary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      border: "var(--app-border, var(--border))",
+      text: "var(--app-text, var(--color))",
+      textMuted: "var(--app-muted, var(--textMuted, var(--app-text)))",
+      textSecondary: "var(--app-subtle, var(--textSubtle, var(--textMuted)))",
+      accent: "#22C55E",
+    }),
+    []
+  );
   
   // Core state
   const [chatId, setChatId] = useState<string>(() => crypto.randomUUID());
-  const [mode, setMode] = useState<"fast" | "deep">("fast");
+  const [mode, setMode] = useState<"fast" | "deep" | "none">("none");
   const [showSteps, setShowSteps] = useState(true);
   const [showCitations, setShowCitations] = useState(true);
   const collapseAll = true;
   const [attachments, setAttachments] = useState<Array<{ name: string; type: string; data: string }>>([]);
   
-  // Pagination state
-  const [showGroupedCount, setShowGroupedCount] = useState(5);
-  const [showUngroupedCount, setShowUngroupedCount] = useState(5);
+  // Sidebar list state
+  const [showHistoryCount, setShowHistoryCount] = useState(HISTORY_PAGE_SIZE);
+  const [historyViewFilter, setHistoryViewFilter] = useState<HistoryViewFilter>("multi");
 
   // Model selection
   const [preferredModels, setPreferredModels] = useState<string[]>([]);
@@ -172,15 +182,34 @@ function StudioPageContent() {
     );
   }, [projects, projectSearch]);
 
-  const groupedProjects = useMemo(
-    () => filteredProjects.filter((p) => p.models.length > 1 || p.subject === "Model Hub Compare"),
-    [filteredProjects]
-  );
+  const filteredPresets = useMemo(() => {
+    if (!projectSearch.trim()) return labPresets;
+    const query = projectSearch.toLowerCase();
+    return labPresets.filter(
+      (preset) =>
+        preset.name.toLowerCase().includes(query) ||
+        (preset.subject ?? "").toLowerCase().includes(query) ||
+        preset.models.join(" ").toLowerCase().includes(query)
+    );
+  }, [labPresets, projectSearch]);
 
-  const ungroupedProjects = useMemo(
-    () => filteredProjects.filter((p) => !(p.models.length > 1 || p.subject === "Model Hub Compare")),
-    [filteredProjects]
-  );
+  const visibleHistoryItems = useMemo(() => {
+    if (historyViewFilter === "single") {
+      return filteredProjects
+        .filter((project) => !isMultiModelProject(project))
+        .map((project) => ({ kind: "project" as const, project }));
+    }
+    if (historyViewFilter === "multi") {
+      return filteredProjects
+        .filter((project) => isMultiModelProject(project))
+        .map((project) => ({ kind: "project" as const, project }));
+    }
+    return filteredPresets.map((preset) => ({ kind: "preset" as const, preset }));
+  }, [historyViewFilter, filteredProjects, filteredPresets]);
+
+  useEffect(() => {
+    setShowHistoryCount(HISTORY_PAGE_SIZE);
+  }, [historyViewFilter, projectSearch]);
 
   // Get selected model details
   const selectedModelDetails = useMemo(() => {
@@ -220,13 +249,16 @@ function StudioPageContent() {
   const handleSaveTranscript = useCallback(
     ({ transcript, models, mode, hasRun }: SaveTranscriptPayload) => {
       const firstUserMsg = transcript.find(
-        (t): t is TranscriptMessage => "role" in t && t.role === "user" && (t.content ?? "").trim()
+        (t): t is TranscriptMessage =>
+          "role" in t && t.role === "user" && (t.content ?? "").trim().length > 0
       );
       if (!firstUserMsg) return;
 
       const question = (firstUserMsg.content ?? "").trim() || "New chat";
       const entries = loadHistory();
       const existing = entries.find((entry) => entry.id === chatId);
+      const existingTranscriptSignature = existing ? JSON.stringify(existing.transcript) : null;
+      const nextTranscriptSignature = JSON.stringify(transcript);
       const createdAt = existing?.createdAt ?? new Date().toISOString();
       const subject = existing?.subject ?? "General";
       const shouldOverrideModels = hasRun || !existing;
@@ -235,6 +267,20 @@ function StudioPageContent() {
       const dedupedModels = Array.from(new Set(normalizedModels.filter(Boolean)));
       const model = dedupedModels[0] ?? existing?.model ?? "Nexus-Core";
       const finalModels = dedupedModels.length ? dedupedModels : [model];
+      const hasSameModels = existing
+        ? existing.models.length === finalModels.length &&
+          existing.models.every((modelId, index) => modelId === finalModels[index])
+        : false;
+
+      if (
+        existing &&
+        existingTranscriptSignature === nextTranscriptSignature &&
+        existing.mode === mode &&
+        existing.model === model &&
+        hasSameModels
+      ) {
+        return;
+      }
 
       const nextEntry: HistoryEntry = {
         id: chatId,
@@ -247,7 +293,9 @@ function StudioPageContent() {
         createdAt,
       };
 
-      const nextEntries = upsertHistoryEntry(nextEntry);
+      const hasNewInformation =
+        !existing || existingTranscriptSignature !== nextTranscriptSignature;
+      const nextEntries = upsertHistoryEntry(nextEntry, { moveToTop: hasNewInformation });
       setProjects(nextEntries);
     },
     [chatId]
@@ -287,6 +335,7 @@ function StudioPageContent() {
               width={300}
               minWidth={260}
               maxWidth={320}
+              alignSelf="flex-start"
               gap="$md"
               padding="$md"
               backgroundColor={colors.bgSecondary}
@@ -296,7 +345,7 @@ function StudioPageContent() {
             >
               <XStack justifyContent="space-between" alignItems="center">
                 <Text fontSize={16} fontWeight="600" color={colors.text}>
-                  History
+                  Previous 30 days
                 </Text>
                 <XStack gap="$xs">
                   <Button
@@ -320,10 +369,43 @@ function StudioPageContent() {
                 </XStack>
               </XStack>
 
+              <YStack gap="$xs">
+                <Text fontSize={11} fontWeight="600" color={colors.textMuted}>
+                  View
+                </Text>
+                <YStack
+                  borderWidth={1}
+                  borderColor={colors.border}
+                  borderRadius="$sm"
+                  backgroundColor={colors.bg}
+                  paddingHorizontal="$sm"
+                >
+                  <select
+                    value={historyViewFilter}
+                    onChange={(event) =>
+                      setHistoryViewFilter(event.currentTarget.value as HistoryViewFilter)
+                    }
+                    style={{
+                      width: "100%",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      color: colors.text,
+                      fontSize: 13,
+                      padding: "8px 0",
+                    }}
+                  >
+                    <option value="single">Single Model</option>
+                    <option value="multi">Multi-Model</option>
+                    <option value="presets">Project Presets</option>
+                  </select>
+                </YStack>
+              </YStack>
+
               <Input
                 value={projectSearch}
                 onChangeText={setProjectSearch}
-                placeholder="Search projects..."
+                placeholder="Search chats & presets..."
                 borderColor={colors.border}
                 backgroundColor={colors.bg}
                 color={colors.text}
@@ -331,198 +413,150 @@ function StudioPageContent() {
                 fontSize={14}
               />
 
-              <YStack flex={1} gap="$md" overflow="scroll">
-                {/* Grouped Projects */}
-                <YStack gap="$xs">
-                  <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
-                    Multi-Model
-                  </Text>
-                  {groupedProjects.length === 0 ? (
-                    <Text fontSize={13} color={colors.textMuted}>
-                      No multi-model chats
-                    </Text>
-                  ) : (
-                    <YStack gap="$xs">
-                      {groupedProjects.slice(0, showGroupedCount).map((project) => {
-                        const isActive = project.id === selectedProjectId;
-                        const title = getProjectTitle(project);
-                        const uniqueModels = Array.from(new Set(project.models));
-                        return (
-                          <Button
-                            key={project.id}
-                            size="$3"
-                            backgroundColor={isActive ? colors.bg : "transparent"}
-                            borderWidth={1}
-                            borderColor={isActive ? colors.accent : colors.border}
-                            justifyContent="flex-start"
-                            onPress={() => handleSelectProject(project.id)}
-                          >
-                            <YStack alignItems="flex-start" gap="$xs" width="100%">
-                              <Text
-                                fontSize={13}
-                                fontWeight="500"
-                                color={colors.text}
-                                numberOfLines={1}
-                              >
-                                {title.length > 40 ? `${title.slice(0, 40)}...` : title}
-                              </Text>
-                              <XStack justifyContent="space-between" width="100%" alignItems="center">
-                                <XStack gap="$sm">
-                                  <Text fontSize={11} color={colors.textMuted}>
-                                    {project.subject}
-                                  </Text>
-                                  <Text fontSize={11} color={colors.textSecondary}>
-                                    {formatDate(project.createdAt)}
-                                  </Text>
-                                </XStack>
-                                <XStack alignItems="center" gap="$xs">
-                                  {uniqueModels.slice(0, 3).map((modelId) => (
-                                    <Text key={modelId} fontSize={10} color={colors.textSecondary}>
-                                      {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
-                                    </Text>
-                                  ))}
-                                  {uniqueModels.length > 3 && (
-                                    <Text fontSize={10} color={colors.textMuted}>
-                                      +{uniqueModels.length - 3}
-                                    </Text>
-                                  )}
-                                </XStack>
-                              </XStack>
-                            </YStack>
-                          </Button>
-                        );
-                      })}
-                      {groupedProjects.length > showGroupedCount && (
-                        <Button
-                          size="$2"
-                          backgroundColor="transparent"
-                          borderWidth={0}
-                          color={colors.accent}
-                          onPress={() => setShowGroupedCount((c) => c + 5)}
-                          icon={<ChevronDown size={14} />}
-                        >
-                          {`Show ${Math.min(5, groupedProjects.length - showGroupedCount)} more`}
-                        </Button>
-                      )}
-                    </YStack>
-                  )}
-                </YStack>
+              <YStack gap="$sm">
+                <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
+                  {historyViewFilter === "presets" ? "Project presets" : "Chats"}
+                </Text>
 
-                {/* Saved Presets */}
-                {labPresets.length > 0 && (
-                  <YStack gap="$xs">
-                    <Text fontSize={12} fontWeight="600" color={colors.accent}>
-                      Saved Presets
-                    </Text>
-                    <YStack gap="$xs">
-                      {labPresets.slice(0, 5).map((preset) => {
-                        const uniquePresetModels = Array.from(new Set(preset.models));
-                        return (
-                          <Button
-                            key={preset.id}
-                            size="$3"
-                            backgroundColor="transparent"
-                            borderWidth={1}
-                            borderColor={colors.border}
-                            justifyContent="flex-start"
-                            onPress={() => setPreferredModels(uniquePresetModels)}
-                          >
-                            <YStack alignItems="flex-start" gap="$xs">
-                              <XStack alignItems="center" gap="$xs">
-                                <Layers size={12} color={colors.accent} />
-                                <Text fontSize={13} fontWeight="500" color={colors.text}>
-                                  {preset.name}
+                {visibleHistoryItems.length === 0 ? (
+                  <Text fontSize={13} color={colors.textMuted}>
+                    {historyViewFilter === "presets"
+                      ? "No saved project presets"
+                      : historyViewFilter === "single"
+                        ? "No single-model chats"
+                        : "No multi-model chats"}
+                  </Text>
+                ) : (
+                  <>
+                    <YStack
+                      borderRadius="$md"
+                      padding="$xs"
+                      style={{ maxHeight: 360, overflowY: "auto", overflowX: "hidden" }}
+                    >
+                      <YStack gap="$xs">
+                        {visibleHistoryItems.slice(0, showHistoryCount).map((item) => {
+                          if (item.kind === "preset") {
+                            const uniquePresetModels = Array.from(new Set(item.preset.models));
+                            const isPresetActive =
+                              uniquePresetModels.length > 0 &&
+                              uniquePresetModels.length === preferredModels.length &&
+                              uniquePresetModels.every((modelId) => preferredModels.includes(modelId));
+
+                            return (
+                              <Button
+                                key={item.preset.id}
+                                size="$3"
+                                backgroundColor={isPresetActive ? colors.bg : "transparent"}
+                                borderWidth={1}
+                                borderColor={isPresetActive ? colors.accent : colors.border}
+                                justifyContent="flex-start"
+                                onPress={() => {
+                                  setPreferredModels(uniquePresetModels);
+                                  setSelectedProjectId(null);
+                                  router.push("/studio");
+                                }}
+                              >
+                                <YStack alignItems="flex-start" gap="$xs" width="100%">
+                                  <XStack alignItems="center" gap="$xs">
+                                    <Layers size={12} color={colors.accent} />
+                                    <Text fontSize={13} fontWeight="500" color={colors.text} numberOfLines={1}>
+                                      {item.preset.name}
+                                    </Text>
+                                  </XStack>
+                                  <XStack justifyContent="space-between" width="100%" alignItems="center">
+                                    <XStack gap="$sm">
+                                      <Text fontSize={11} color={colors.textMuted}>
+                                        {item.preset.subject ?? "Project preset"}
+                                      </Text>
+                                      <Text fontSize={11} color={colors.textSecondary}>
+                                        {formatDate(item.preset.createdAt)}
+                                      </Text>
+                                    </XStack>
+                                    <XStack alignItems="center" gap="$xs">
+                                      {uniquePresetModels.slice(0, 3).map((modelId) => (
+                                        <Text key={modelId} fontSize={10} color={colors.textSecondary}>
+                                          {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                                        </Text>
+                                      ))}
+                                      {uniquePresetModels.length > 3 && (
+                                        <Text fontSize={10} color={colors.textMuted}>
+                                          +{uniquePresetModels.length - 3}
+                                        </Text>
+                                      )}
+                                    </XStack>
+                                  </XStack>
+                                </YStack>
+                              </Button>
+                            );
+                          }
+
+                          const project = item.project;
+                          const isActive = project.id === selectedProjectId;
+                          const title = getProjectTitle(project);
+                          const uniqueModels = Array.from(new Set(project.models));
+
+                          return (
+                            <Button
+                              key={project.id}
+                              size="$3"
+                              backgroundColor={isActive ? colors.bg : "transparent"}
+                              borderWidth={1}
+                              borderColor={isActive ? colors.accent : colors.border}
+                              justifyContent="flex-start"
+                              onPress={() => handleSelectProject(project.id)}
+                            >
+                              <YStack alignItems="flex-start" gap="$xs" width="100%">
+                                <Text
+                                  fontSize={13}
+                                  fontWeight="500"
+                                  color={colors.text}
+                                  numberOfLines={1}
+                                >
+                                  {title.length > 40 ? `${title.slice(0, 40)}...` : title}
                                 </Text>
-                              </XStack>
-                              <XStack alignItems="center" gap="$xs">
-                                {uniquePresetModels.slice(0, 3).map((modelId) => (
-                                  <Text key={modelId} fontSize={10} color={colors.textSecondary}>
-                                    {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
-                                  </Text>
-                                ))}
-                                {uniquePresetModels.length > 3 && (
-                                  <Text fontSize={10} color={colors.textMuted}>
-                                    +{uniquePresetModels.length - 3}
-                                  </Text>
-                                )}
-                              </XStack>
-                            </YStack>
-                          </Button>
-                        );
-                      })}
-                    </YStack>
-                  </YStack>
-                )}
-
-                {/* Ungrouped Projects */}
-                <YStack gap="$xs">
-                  <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
-                    Single Model
-                  </Text>
-                  {ungroupedProjects.length === 0 ? (
-                    <Text fontSize={13} color={colors.textMuted}>
-                      No single-model chats
-                    </Text>
-                  ) : (
-                    <YStack gap="$xs">
-                      {ungroupedProjects.slice(0, showUngroupedCount).map((project) => {
-                        const isActive = project.id === selectedProjectId;
-                        const title = getProjectTitle(project);
-                        const modelId = project.models[0];
-                        const model = modelId ? modelMetaMap.get(modelId) : null;
-                        return (
-                          <Button
-                            key={project.id}
-                            size="$3"
-                            backgroundColor={isActive ? colors.bg : "transparent"}
-                            borderWidth={1}
-                            borderColor={isActive ? colors.accent : colors.border}
-                            justifyContent="flex-start"
-                            onPress={() => handleSelectProject(project.id)}
-                          >
-                            <YStack alignItems="flex-start" gap="$xs" width="100%">
-                              <Text
-                                fontSize={13}
-                                fontWeight="500"
-                                color={colors.text}
-                                numberOfLines={1}
-                              >
-                                {title.length > 40 ? `${title.slice(0, 40)}...` : title}
-                              </Text>
-                              <XStack justifyContent="space-between" width="100%" alignItems="center">
-                                <XStack gap="$sm">
-                                  <Text fontSize={11} color={colors.textMuted}>
-                                    {project.subject}
-                                  </Text>
-                                  <Text fontSize={11} color={colors.textSecondary}>
-                                    {formatDate(project.createdAt)}
-                                  </Text>
+                                <XStack justifyContent="space-between" width="100%" alignItems="center">
+                                  <XStack gap="$sm">
+                                    <Text fontSize={11} color={colors.textMuted}>
+                                      {isMultiModelProject(project) ? "Multi-Model" : "Single Model"}
+                                    </Text>
+                                    <Text fontSize={11} color={colors.textSecondary}>
+                                      {formatDate(project.createdAt)}
+                                    </Text>
+                                  </XStack>
+                                  <XStack alignItems="center" gap="$xs">
+                                    {uniqueModels.slice(0, 3).map((modelId) => (
+                                      <Text key={modelId} fontSize={10} color={colors.textSecondary}>
+                                        {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
+                                      </Text>
+                                    ))}
+                                    {uniqueModels.length > 3 && (
+                                      <Text fontSize={10} color={colors.textMuted}>
+                                        +{uniqueModels.length - 3}
+                                      </Text>
+                                    )}
+                                  </XStack>
                                 </XStack>
-                                {model && (
-                                  <Text fontSize={10} color={colors.textSecondary}>
-                                    {getProviderIcon(model.provider)}
-                                  </Text>
-                                )}
-                              </XStack>
-                            </YStack>
-                          </Button>
-                        );
-                      })}
-                      {ungroupedProjects.length > showUngroupedCount && (
-                        <Button
-                          size="$2"
-                          backgroundColor="transparent"
-                          borderWidth={0}
-                          color={colors.accent}
-                          onPress={() => setShowUngroupedCount((c) => c + 5)}
-                          icon={<ChevronDown size={14} />}
-                        >
-                          {`Show ${Math.min(5, ungroupedProjects.length - showUngroupedCount)} more`}
-                        </Button>
-                      )}
+                              </YStack>
+                            </Button>
+                          );
+                        })}
+                      </YStack>
                     </YStack>
-                  )}
-                </YStack>
+
+                    {visibleHistoryItems.length > showHistoryCount && (
+                      <Button
+                        size="$2"
+                        backgroundColor="transparent"
+                        borderWidth={0}
+                        color={colors.accent}
+                        onPress={() => setShowHistoryCount((count) => count + HISTORY_PAGE_SIZE)}
+                        icon={<ChevronDown size={14} />}
+                      >
+                        {`Show ${Math.min(HISTORY_PAGE_SIZE, visibleHistoryItems.length - showHistoryCount)} more`}
+                      </Button>
+                    )}
+                  </>
+                )}
               </YStack>
             </YStack>
           )}
@@ -660,59 +694,6 @@ function StudioPageContent() {
                   </Text>
                 </YStack>
 
-                <YStack gap="$xs" minWidth={120}>
-                  <Text fontSize={13} fontWeight="500" color={colors.text}>
-                    Mode
-                  </Text>
-                  <XStack gap="$xs">
-                    <Button
-                      size="$3"
-                      flex={1}
-                      backgroundColor={mode === "fast" ? colors.accent : "transparent"}
-                      color={mode === "fast" ? "black" : colors.text}
-                      borderWidth={1}
-                      borderColor={colors.border}
-                      onPress={() => setMode("fast")}
-                    >
-                      Fast
-                    </Button>
-                    <Button
-                      size="$3"
-                      flex={1}
-                      backgroundColor={mode === "deep" ? colors.accent : "transparent"}
-                      color={mode === "deep" ? "black" : colors.text}
-                      borderWidth={1}
-                      borderColor={colors.border}
-                      onPress={() => setMode("deep")}
-                    >
-                      Deep
-                    </Button>
-                  </XStack>
-                </YStack>
-              </XStack>
-
-              {/* Toggles */}
-              <XStack gap="$sm" flexWrap="wrap">
-                <Button
-                  size="$2"
-                  backgroundColor={showSteps ? colors.accent : "transparent"}
-                  color={showSteps ? "black" : colors.text}
-                  borderWidth={1}
-                  borderColor={colors.border}
-                  onPress={() => setShowSteps(!showSteps)}
-                >
-                  {showSteps ? "✓" : "○"} Steps
-                </Button>
-                <Button
-                  size="$2"
-                  backgroundColor={showCitations ? colors.accent : "transparent"}
-                  color={showCitations ? "black" : colors.text}
-                  borderWidth={1}
-                  borderColor={colors.border}
-                  onPress={() => setShowCitations(!showCitations)}
-                >
-                  {showCitations ? "✓" : "○"} Citations
-                </Button>
               </XStack>
             </YStack>
 
@@ -735,6 +716,13 @@ function StudioPageContent() {
                 onAttachmentsChange={setAttachments}
                 showSteps={showSteps}
                 showCitations={showCitations}
+                onModeChange={setMode}
+                onToggleSteps={() => setShowSteps((prev) => !prev)}
+                onToggleCitations={() => setShowCitations((prev) => !prev)}
+                onSetAggregatorModel={setAggregatorModel}
+                onAddModelsToStack={(modelIds) =>
+                  setPreferredModels((prev) => Array.from(new Set([...prev, ...modelIds])))
+                }
                 collapseAll={collapseAll}
                 modelMetaMap={modelMetaMap}
                 modelNameMap={modelNameMap}
@@ -742,6 +730,7 @@ function StudioPageContent() {
                 toolOverrides={toolOverrides}
                 toolOverridesByIndex={toolOverridesByIndex}
                 onSaveTranscript={handleSaveTranscript}
+                onRequestNewChat={handleNewChat}
               />
             </YStack>
           </YStack>

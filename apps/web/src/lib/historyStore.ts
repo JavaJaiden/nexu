@@ -70,9 +70,13 @@ function normalizeTranscriptItem(raw: any): TranscriptItem | null {
     const createdAt = typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString();
     const selectionMode =
       raw.selectionMode === "single" || raw.selectionMode === "multi" ? raw.selectionMode : "auto";
-    const selectedModelIds = Array.isArray(raw.selectedModelIds)
+    const selectedModelIds: string[] = Array.isArray(raw.selectedModelIds)
       ? Array.from(
-          new Set(raw.selectedModelIds.filter((item: any) => typeof item === "string"))
+          new Set(
+            raw.selectedModelIds
+              .filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+              .map((item: string) => item.trim())
+          )
         )
       : [];
     const status = raw.status === "draft" ? "draft" : "final";
@@ -213,13 +217,26 @@ export function addHistoryEntry(entry: HistoryEntry) {
   return nextEntries;
 }
 
-export function upsertHistoryEntry(entry: HistoryEntry) {
+export function upsertHistoryEntry(
+  entry: HistoryEntry,
+  options: { moveToTop?: boolean } = {}
+) {
+  const { moveToTop = true } = options;
   const entries = loadHistory();
   const existingIndex = entries.findIndex((item) => item.id === entry.id);
-  const filtered = entries.filter((item) => item.id !== entry.id);
-  const nextEntries = [entry, ...filtered].slice(0, 200);
-  saveHistory(nextEntries);
-  return nextEntries;
+
+  let nextEntries: HistoryEntry[];
+  if (existingIndex === -1 || moveToTop) {
+    const filtered = entries.filter((item) => item.id !== entry.id);
+    nextEntries = [entry, ...filtered];
+  } else {
+    nextEntries = [...entries];
+    nextEntries.splice(existingIndex, 1, entry);
+  }
+
+  const trimmedEntries = nextEntries.slice(0, 200);
+  saveHistory(trimmedEntries);
+  return trimmedEntries;
 }
 
 export function getHistoryEntry(id: string): HistoryEntry | null {

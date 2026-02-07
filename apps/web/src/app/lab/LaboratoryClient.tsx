@@ -131,13 +131,13 @@ export default function LaboratoryPage() {
   // Theme colors
   const colors = useMemo(
     () => ({
-      bg: isDark ? "#0a0a0b" : "#ffffff",
-      bgSecondary: isDark ? "#141415" : "#f8f9fa",
-      bgTertiary: isDark ? "#1a1a1b" : "#f1f3f5",
-      border: isDark ? "#2a2a2b" : "#e9ecef",
-      text: isDark ? "#ffffff" : "#111827",
-      textMuted: isDark ? "#9CA3AF" : "#6b7280",
-      textSecondary: isDark ? "#6b7280" : "#9ca3af",
+      bg: "var(--app-bg, var(--background))",
+      bgSecondary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      bgTertiary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      border: "var(--app-border, var(--border))",
+      text: "var(--app-text, var(--color))",
+      textMuted: "var(--app-muted, var(--textMuted, var(--app-text)))",
+      textSecondary: "var(--app-subtle, var(--textSubtle, var(--textMuted)))",
       accent: "#22C55E",
       accentBg: isDark ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.1)",
       gold: "#F59E0B",

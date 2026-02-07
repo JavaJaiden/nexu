@@ -3,7 +3,7 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, Paragraph, Text, XStack, YStack } from "tamagui";
-import { Check, ChevronDown, Crown, Search, Zap } from "lucide-react";
+import { Bot, Check, ChevronDown, Crown, Search, Zap } from "lucide-react";
 import type { ModelCard } from "@/lib/modelCatalog";
 import { getCapabilitiesLabel, getProviderIcon } from "@/lib/modelCatalog";
 import { categorizeModelTier, deriveCapabilityTags } from "@/lib/modelTier";
@@ -33,6 +33,8 @@ const AUTO_OPTION: AgentOption = {
   searchText: "auto nexus routing router agent chat tools streaming function calling",
   isAuto: true,
 };
+
+const NEXUS_ROUTING_MODEL_IDS = new Set(["Nexus-Core", "Nexus-Math", "Nexus-Code", "Nexus-Write"]);
 
 function buildSearchText(model: ModelCard) {
   const capabilityTags = deriveCapabilityTags(model).join(" ");
@@ -207,15 +209,26 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
   );
 
   const filteredQuick = useMemo(
-    () => options.filter((option) => option.tier === "quick").filter(matchesSearch),
+    () =>
+      options
+        .filter((option) => option.tier === "quick" && !NEXUS_ROUTING_MODEL_IDS.has(option.id))
+        .filter(matchesSearch),
+    [options, matchesSearch]
+  );
+  const filteredNexus = useMemo(
+    () => options.filter((option) => NEXUS_ROUTING_MODEL_IDS.has(option.id)).filter(matchesSearch),
     [options, matchesSearch]
   );
   const filteredPro = useMemo(
-    () => options.filter((option) => option.tier === "pro").filter(matchesSearch),
+    () =>
+      options
+        .filter((option) => option.tier === "pro" && !NEXUS_ROUTING_MODEL_IDS.has(option.id))
+        .filter(matchesSearch),
     [options, matchesSearch]
   );
 
   const showAuto = !isSearching || AUTO_OPTION.searchText.includes(searchQuery);
+  const showNexusSection = showAuto || filteredNexus.length > 0;
   const quickVisible = useMemo(() => {
     if (isSearching || expandedQuick) return filteredQuick;
     return filteredQuick.slice(0, capSize);
@@ -231,9 +244,10 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
   const flatOptions = useMemo(() => {
     const next: AgentOption[] = [];
     if (showAuto && matchesSearch(AUTO_OPTION)) next.push(AUTO_OPTION);
+    next.push(...filteredNexus);
     next.push(...quickVisible, ...proVisible);
     return next;
-  }, [quickVisible, proVisible, showAuto, matchesSearch]);
+  }, [filteredNexus, quickVisible, proVisible, showAuto, matchesSearch]);
 
   const activeOption = flatOptions[activeIndex] ?? null;
 
@@ -329,10 +343,22 @@ export default function AgentPicker({ value, onChange, models }: AgentPickerProp
           </YStack>
 
           <YStack flex={1} overflow="scroll" padding="$sm" gap="$lg">
+            {showNexusSection && (
+              <AgentSection
+                title="Nexus Routing"
+                icon={<Bot size={14} color="#3B82F6" />}
+                options={[...(showAuto ? [AUTO_OPTION] : []), ...filteredNexus]}
+                selectedId={value}
+                activeId={activeOption?.id ?? null}
+                onSelect={handleSelect}
+                showMore={false}
+                onShowMore={() => {}}
+              />
+            )}
             <AgentSection
               title="Quick Agents"
               icon={<Zap size={14} color="#22C55E" />}
-              options={[...(showAuto ? [AUTO_OPTION] : []), ...quickVisible]}
+              options={quickVisible}
               selectedId={value}
               activeId={activeOption?.id ?? null}
               onSelect={handleSelect}

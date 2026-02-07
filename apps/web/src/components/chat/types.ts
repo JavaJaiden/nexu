@@ -35,6 +35,8 @@ export type AggregatedResult = {
   confidence?: number;
 };
 
+export type ComposerMode = "fast" | "deep" | "none";
+
 export type ExecutionPlan = {
   runId: string;
   question: string;
@@ -43,6 +45,9 @@ export type ExecutionPlan = {
   snapshotId?: string;
   createdAt: number;
   mode: "fast" | "deep";
+  temperature?: number;
+  maxTokens?: number;
+  contextMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   attachments: Array<{ name: string; type: string; data: string }>;
 };
 
@@ -88,6 +93,13 @@ export type SaveTranscriptPayload = {
   hasRun: boolean;
 };
 
+export type SuggestionTask = "code" | "creative" | "analysis" | "general";
+
+export type TaskSuggestionModel = {
+  id: string;
+  name: string;
+};
+
 export interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
@@ -95,9 +107,22 @@ export interface ComposerProps {
   onStop: () => void;
   isBusy: boolean;
   isReadOnly?: boolean;
+  mode: ComposerMode;
+  onModeChange: (mode: ComposerMode) => void;
+  showSteps: boolean;
+  onToggleSteps: () => void;
+  showCitations: boolean;
+  onToggleCitations: () => void;
   attachments: PdfAttachment[];
   onRemoveAttachment: (index: number) => void;
   onFilesSelected: (files: FileList | null) => void;
+  taskSuggestions: Record<SuggestionTask, TaskSuggestionModel[]>;
+  onUseSuggestedAggregator: (modelId: string) => void;
+  onAddSuggestedModelsToStack: (modelIds: string[]) => void;
+  temperature: number;
+  maxTokens: number;
+  onTemperatureChange: (value: number) => void;
+  onMaxTokensChange: (value: number) => void;
   placeholder?: string;
 }
 
@@ -120,6 +145,11 @@ export interface RunPanelProps {
   onCompare: () => void;
   onToggleIndividual: () => void;
   onCopy: (modelId: string) => void;
+  onCopyAggregated: () => void;
+  onRetryModel: (modelId: string) => void;
+  onRetryAll: () => void;
+  onBranchModel: (modelId: string) => void;
+  onBranchAggregated: () => void;
 }
 
 export interface TimelineProps {
@@ -135,4 +165,9 @@ export interface TimelineProps {
   onCompareRun: (runId: string) => void;
   onToggleRunIndividual: (runId: string) => void;
   onCopyModel: (runId: string, modelId: string) => void;
+  onCopyAggregated: (runId: string) => void;
+  onRetryModel: (runId: string, modelId: string) => void;
+  onRetryAll: (runId: string) => void;
+  onBranchModel: (runId: string, modelId: string) => void;
+  onBranchAggregated: (runId: string) => void;
 }

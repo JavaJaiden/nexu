@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Button,
@@ -37,6 +37,9 @@ import {
   MessageSquare,
   Bot,
   Send,
+  Paperclip,
+  Mic,
+  MicOff,
   ChevronUp,
   BarChart3,
   Award,
@@ -49,6 +52,9 @@ import { getModelHubCards, getProviderIcon, type ModelCard } from "@/lib/modelCa
 import type { LeaderboardModel } from "@/lib/leaderboard";
 import { useThemeSetting } from "@/lib/themeContext";
 import { loadLabPresets, upsertLabPreset, type LabPreset } from "@/lib/labStore";
+import { fileToAttachment, isPdfFile } from "@/lib/attachments";
+import type { PdfAttachment } from "@/lib/externalContext";
+import { useSpeechDictation } from "@/lib/useSpeechDictation";
 
 // ============================================================================
 // TYPES
@@ -109,6 +115,8 @@ interface ChatMessage {
   content: string;
   recommendations?: Array<{ id: string; reason: string; confidence: number }>;
 }
+
+const NEXUS_ROUTING_MODEL_IDS = new Set(["Nexus-Core", "Nexus-Math", "Nexus-Code", "Nexus-Write"]);
 
 // ============================================================================
 // MOCK DATA SOURCES
@@ -255,6 +263,10 @@ function ModelHubContent() {
 
   // Data
   const allModels = useMemo(() => getModelHubCards(), []);
+  const leaderboardEligibleModels = useMemo(
+    () => allModels.filter((model) => !NEXUS_ROUTING_MODEL_IDS.has(model.id)),
+    [allModels]
+  );
   const [leaderboardModels, setLeaderboardModels] = useState<LeaderboardModel[]>([]);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
 
@@ -272,6 +284,7 @@ function ModelHubContent() {
   const [chatMode, setChatMode] = useState<ChatMode>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [chatAttachments, setChatAttachments] = useState<PdfAttachment[]>([]);
   
   // Preset save modal state
   const [showSavePreset, setShowSavePreset] = useState(false);
@@ -281,22 +294,26 @@ function ModelHubContent() {
 
   const filterPanelRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Theme colors
-  const colors = useMemo(() => ({
-    bg: isDark ? "#0a0a0b" : "#ffffff",
-    bgSecondary: isDark ? "#141415" : "#f8f9fa",
-    bgTertiary: isDark ? "#1a1a1b" : "#f1f3f5",
-    border: isDark ? "#2a2a2b" : "#e9ecef",
-    text: isDark ? "#ffffff" : "#111827",
-    textMuted: isDark ? "#9CA3AF" : "#6b7280",
-    textSecondary: isDark ? "#6b7280" : "#9ca3af",
-    accent: "#22C55E",
-    accentBg: isDark ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.1)",
-    gold: "#F59E0B",
-    blue: "#3B82F6",
-    red: "#EF4444",
-  }), [isDark]);
+  const colors = useMemo(
+    () => ({
+      bg: "var(--app-bg, var(--background))",
+      bgSecondary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      bgTertiary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      border: "var(--app-border, var(--border))",
+      text: "var(--app-text, var(--color))",
+      textMuted: "var(--app-muted, var(--textMuted, var(--app-text)))",
+      textSecondary: "var(--app-subtle, var(--textSubtle, var(--textMuted)))",
+      accent: "#22C55E",
+      accentBg: isDark ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.1)",
+      gold: "#F59E0B",
+      blue: "#3B82F6",
+      red: "#EF4444",
+    }),
+    [isDark]
+  );
 
   // Load data
   useEffect(() => {
@@ -318,7 +335,10 @@ function ModelHubContent() {
   useEffect(() => {
     const stackParam = searchParams.get("stack");
     if (stackParam) {
-      const ids = stackParam.split(",").filter(Boolean);
+      const ids = stackParam
+        .split(",")
+        .filter(Boolean)
+        .filter((id) => !NEXUS_ROUTING_MODEL_IDS.has(id));
       setSelectedIds(new Set(ids));
     }
   }, [searchParams]);
@@ -333,6 +353,26 @@ function ModelHubContent() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [filterOpen]);
+
+  const appendChatDictationText = useCallback((spokenText: string) => {
+    setChatInput((current) => {
+      const separator = current.trim().length === 0 || /\s$/.test(current) ? "" : " ";
+      return `${current}${separator}${spokenText}`;
+    });
+  }, []);
+
+  const {
+    isSupported: supportsChatDictation,
+    isListening: isChatDictating,
+    toggle: toggleChatDictation,
+    stop: stopChatDictation,
+  } = useSpeechDictation({ onText: appendChatDictationText });
+
+  useEffect(() => {
+    if (isChatOpen) return;
+    if (!isChatDictating) return;
+    stopChatDictation();
+  }, [isChatOpen, isChatDictating, stopChatDictation]);
 
   // Build detailed model data
   const getDetailedModel = (model: ModelCard, rank: number): DetailedModelData => {
@@ -379,7 +419,7 @@ function ModelHubContent() {
 
   // Filter and sort models
   const modelRows = useMemo(() => {
-    let rows = allModels.map((model, index) => ({
+    let rows = leaderboardEligibleModels.map((model, index) => ({
       ...getDetailedModel(model, index + 1),
       isSelected: selectedIds.has(model.id),
     }));
@@ -429,16 +469,16 @@ function ModelHubContent() {
     });
 
     return rows.map((row, index) => ({ ...row, rank: index + 1 }));
-  }, [allModels, searchQuery, providerFilters, capabilityFilters, priceFilters, sortKey, sortDir, selectedIds]);
+  }, [leaderboardEligibleModels, searchQuery, providerFilters, capabilityFilters, priceFilters, sortKey, sortDir, selectedIds]);
 
   // Get unique values for filters
   const allProviders = useMemo(
-    () => Array.from(new Set(allModels.map((m) => m.provider))).sort(),
-    [allModels]
+    () => Array.from(new Set(leaderboardEligibleModels.map((m) => m.provider))).sort(),
+    [leaderboardEligibleModels]
   );
   const allCapabilities = useMemo(
-    () => Array.from(new Set(allModels.flatMap((m) => getCapabilities(m)))).sort(),
-    [allModels]
+    () => Array.from(new Set(leaderboardEligibleModels.flatMap((m) => getCapabilities(m)))).sort(),
+    [leaderboardEligibleModels]
   );
   const priceTiers = ["free", "budget", "standard", "premium", "enterprise"];
 
@@ -491,20 +531,47 @@ function ModelHubContent() {
     setShowSavePreset(false);
   };
 
+  const handleChatFilesSelected = async (files: FileList | null) => {
+    if (!files) return;
+    const newAttachments: PdfAttachment[] = [];
+    for (const file of Array.from(files)) {
+      if (!isPdfFile(file)) continue;
+      try {
+        const attachment = await fileToAttachment(file);
+        newAttachments.push(attachment);
+      } catch {
+        // Ignore failed attachments.
+      }
+    }
+    if (newAttachments.length === 0) return;
+    setChatAttachments((prev) => [...prev, ...newAttachments]);
+  };
+
   const handleChatSend = () => {
-    if (!chatInput.trim()) return;
+    const trimmed = chatInput.trim();
+    if (!trimmed) return;
+    if (isChatDictating) {
+      stopChatDictation();
+    }
+
+    const attachmentSuffix =
+      chatAttachments.length > 0
+        ? `\n\nAttached PDFs: ${chatAttachments.map((attachment) => attachment.name).join(", ")}`
+        : "";
+    const prompt = `${trimmed}${attachmentSuffix}`;
     
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
-      content: chatInput,
+      content: prompt,
     };
     
     setChatMessages((prev) => [...prev, userMsg]);
     setChatInput("");
+    setChatAttachments([]);
     
     setTimeout(() => {
-      const response = generateModelRecommendation(chatInput, modelRows);
+      const response = generateModelRecommendation(prompt, modelRows);
       setChatMessages((prev) => [...prev, response]);
     }, 1000);
   };
@@ -735,7 +802,76 @@ function ModelHubContent() {
 
             {/* Chat Input */}
             <YStack padding="$md" borderTopWidth={1} borderColor={colors.border} gap="$sm">
+              <input
+                ref={chatFileInputRef}
+                type="file"
+                accept="application/pdf"
+                multiple
+                onChange={(event) => {
+                  handleChatFilesSelected(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                style={{ display: "none" }}
+              />
+
+              {chatAttachments.length > 0 && (
+                <XStack flexWrap="wrap" gap="$xs">
+                  {chatAttachments.map((attachment, index) => (
+                    <XStack
+                      key={`${attachment.name}-${index}`}
+                      alignItems="center"
+                      gap="$xs"
+                      borderWidth={1}
+                      borderColor={colors.border}
+                      borderRadius="$full"
+                      paddingHorizontal="$sm"
+                      paddingVertical="$xs"
+                      backgroundColor={colors.bgTertiary}
+                    >
+                      <Text fontSize={11} color={colors.textMuted} numberOfLines={1} maxWidth={160}>
+                        {attachment.name}
+                      </Text>
+                      <Button
+                        size="$1"
+                        backgroundColor="transparent"
+                        borderWidth={0}
+                        color={colors.textMuted}
+                        padding={0}
+                        onPress={() =>
+                          setChatAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                        }
+                        icon={<X size={12} />}
+                      />
+                    </XStack>
+                  ))}
+                </XStack>
+              )}
+
               <XStack alignItems="flex-end" gap="$sm">
+                <XStack gap="$xs">
+                  <Button
+                    size="$3"
+                    backgroundColor={colors.bgTertiary}
+                    borderWidth={1}
+                    borderColor={colors.border}
+                    color={colors.textMuted}
+                    borderRadius="$md"
+                    onPress={() => chatFileInputRef.current?.click()}
+                    icon={<Paperclip size={16} />}
+                  />
+                  <Button
+                    size="$3"
+                    backgroundColor={isChatDictating ? colors.accentBg : colors.bgTertiary}
+                    borderWidth={1}
+                    borderColor={isChatDictating ? colors.accent : colors.border}
+                    color={isChatDictating ? colors.accent : colors.textMuted}
+                    borderRadius="$md"
+                    onPress={toggleChatDictation}
+                    disabled={!supportsChatDictation}
+                    opacity={supportsChatDictation ? 1 : 0.5}
+                    icon={isChatDictating ? <MicOff size={16} /> : <Mic size={16} />}
+                  />
+                </XStack>
                 <textarea
                   ref={chatInputRef}
                   value={chatInput}
@@ -852,7 +988,7 @@ function ModelHubContent() {
                 Selected Models:
               </Text>
               {Array.from(selectedIds).map((id) => {
-                const model = allModels.find((m) => m.id === id);
+                const model = leaderboardEligibleModels.find((m) => m.id === id);
                 if (!model) return null;
                 return (
                   <XStack
@@ -1311,7 +1447,7 @@ function ModelHubContent() {
             </YStack>
 
             <Text fontSize={12} color={colors.textSecondary}>
-              {`Showing ${modelRows.length} of ${allModels.length} models`}
+              {`Showing ${modelRows.length} of ${leaderboardEligibleModels.length} models`}
             </Text>
           </XStack>
         </YStack>

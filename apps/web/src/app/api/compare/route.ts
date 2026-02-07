@@ -50,14 +50,28 @@ export async function POST(req: Request) {
     return new Response("Missing OPENAI_API_KEY", { status: 500 });
   }
 
-  const { question, models, mode, maxSameModel, attachments, stepsMode } = (await req.json()) as {
-    question: string;
-    models: string[];
-    mode?: "fast" | "deep";
-    maxSameModel?: number;
-    attachments?: Array<{ name: string; type: string; data: string }>;
-    stepsMode?: "brief" | "detailed";
-  };
+  const {
+    question,
+    models,
+    mode,
+    maxSameModel,
+    attachments,
+    stepsMode,
+    messages,
+    temperature,
+    maxTokens,
+  } =
+    (await req.json()) as {
+      question: string;
+      models: string[];
+      mode?: "fast" | "deep";
+      maxSameModel?: number;
+      attachments?: Array<{ name: string; type: string; data: string }>;
+      stepsMode?: "brief" | "detailed";
+      messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+      temperature?: number;
+      maxTokens?: number;
+    };
 
   if (!question || !Array.isArray(models) || models.length === 0) {
     return new Response("Missing question or models", { status: 400 });
@@ -82,8 +96,40 @@ export async function POST(req: Request) {
   const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
   const maxSteps = normalizedStepsMode === "detailed" ? 8 : 5;
   const maxSame = typeof maxSameModel === "number" && maxSameModel > 0 ? maxSameModel : 5;
+  const normalizedTemperature =
+    typeof temperature === "number" && Number.isFinite(temperature)
+      ? Math.min(1, Math.max(0, temperature))
+      : 0.3;
+  const normalizedMaxTokens =
+    typeof maxTokens === "number" && Number.isFinite(maxTokens)
+      ? Math.max(128, Math.min(4096, Math.round(maxTokens)))
+      : 1600;
   const usageCounts: Record<string, number> = {};
   const externalContext = await buildExternalContext(question, attachments ?? []);
+  const normalizedMessages = Array.isArray(messages)
+    ? messages
+        .filter((message) => message && typeof message.content === "string")
+        .map((message) => ({
+          role: message.role === "assistant" || message.role === "system" ? message.role : "user",
+          content: message.content.trim(),
+        }))
+        .filter((message) => message.content.length > 0)
+    : [];
+  const lastMessage = normalizedMessages[normalizedMessages.length - 1];
+  const conversationMessages =
+    lastMessage?.role === "user" && lastMessage.content === question
+      ? normalizedMessages.slice(0, -1)
+      : normalizedMessages;
+  const conversation =
+    conversationMessages.length > 0
+      ? conversationMessages
+          .map((message) => {
+            const label =
+              message.role === "assistant" ? "Assistant" : message.role === "system" ? "System" : "User";
+            return `${label}: ${message.content}`;
+          })
+          .join("\n")
+      : "";
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -119,6 +165,10 @@ export async function POST(req: Request) {
         }
         usageCounts[gateway.resolvedLabel] = (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
         const startedAt = Date.now();
+        const generationConfig = {
+          temperature: normalizedTemperature,
+          maxTokens: normalizedMaxTokens,
+        } as any;
         const result = await generateObject({
           model: gateway.model,
           schema: z.object({
@@ -126,15 +176,24 @@ export async function POST(req: Request) {
             final: z.string(),
             confidence: z.number().min(0).max(1),
           }),
+          ...generationConfig,
           system:
             normalizedStepsMode === "detailed"
               ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
               : "You are a homework assistant. Provide clear, concise steps and a final answer.",
-          prompt: `Subject: ${subject.subject}\nMode: ${selectedMode}\nQuestion: ${question}\n${
+          prompt: `Subject: ${subject.subject}\nMode: ${selectedMode}\n${
+            conversation ? `Conversation:\n${conversation}\n\n` : ""
+          }Question: ${question}\n${
             externalContext ? `\nContext:\n${externalContext}\n` : ""
           }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
         });
         const durationMs = Date.now() - startedAt;
+
+        const generated = result.object as {
+          steps: string[];
+          final: string;
+          confidence: number;
+        };
 
         write({
           type: "result",
@@ -142,9 +201,9 @@ export async function POST(req: Request) {
             requestedModel: normalized,
             model: normalized,
             usedModel: gateway.resolvedLabel,
-            steps: result.object.steps,
-            final: result.object.final,
-            confidence: result.object.confidence,
+            steps: generated.steps,
+            final: generated.final,
+            confidence: generated.confidence,
             durationMs,
             citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
             gatewayNote: gateway.fallbackNote,

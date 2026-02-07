@@ -14,10 +14,13 @@ export async function POST(req: Request) {
     return new Response("Missing OPENAI_API_KEY", { status: 500 });
   }
 
-  const { question, answers, aggregatorModel, attachments } = (await req.json()) as {
+  const { question, answers, aggregatorModel, temperature, maxTokens, attachments } =
+    (await req.json()) as {
     question: string;
     answers: Array<{ model: string; final: string }>;
     aggregatorModel?: string;
+    temperature?: number;
+    maxTokens?: number;
     attachments?: Array<{ name: string; type: string; data: string }>;
   };
 
@@ -28,6 +31,14 @@ export async function POST(req: Request) {
   const aggregatorLabel = typeof aggregatorModel === "string" ? aggregatorModel : null;
   const fallbackLabel = "Nexus-Core";
   const fallbackModelId = "gpt-4o-mini";
+  const normalizedTemperature =
+    typeof temperature === "number" && Number.isFinite(temperature)
+      ? Math.min(1, Math.max(0, temperature))
+      : 0.3;
+  const normalizedMaxTokens =
+    typeof maxTokens === "number" && Number.isFinite(maxTokens)
+      ? Math.max(128, Math.min(4096, Math.round(maxTokens)))
+      : 1600;
   const externalContext = await buildExternalContext(question, attachments ?? []);
   const isRouter = aggregatorLabel ? aggregatorLabel.startsWith("Nexus-") : true;
   const gateway = aggregatorLabel
@@ -37,6 +48,10 @@ export async function POST(req: Request) {
     : resolveRouterModel("Nexus-Core", {}, 3);
 
   const startedAt = Date.now();
+  const generationConfig = {
+    temperature: normalizedTemperature,
+    maxTokens: normalizedMaxTokens,
+  } as any;
   const result = await generateObject({
     model: gateway.model,
     schema: z.object({
@@ -44,6 +59,7 @@ export async function POST(req: Request) {
       final: z.string(),
       confidence: z.number().min(0).max(1),
     }),
+    ...generationConfig,
     system:
       "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
     prompt: `Question: ${question}\n${
@@ -53,15 +69,20 @@ export async function POST(req: Request) {
       .join("\n")}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
   });
   const durationMs = Date.now() - startedAt;
+  const generated = result.object as {
+    steps: string[];
+    final: string;
+    confidence: number;
+  };
   const selectionReason = aggregatorLabel
     ? `User-selected aggregator (${aggregatorLabel}).`
     : "Auto-selected Nexus aggregator.";
 
   return Response.json({
     model: gateway.resolvedLabel,
-    steps: result.object.steps,
-    final: result.object.final,
-    confidence: result.object.confidence,
+    steps: generated.steps,
+    final: generated.final,
+    confidence: generated.confidence,
     durationMs,
     gatewayNote: gateway.fallbackNote,
     selectionReason,

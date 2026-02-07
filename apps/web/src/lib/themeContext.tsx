@@ -31,6 +31,10 @@ export function ThemeSettingProvider({ children }: { children: React.ReactNode }
     document.documentElement.style.colorScheme = theme;
     document.documentElement.classList.remove("t_light", "t_dark");
     document.documentElement.classList.add(`t_${theme}`);
+    if (document.body) {
+      document.body.classList.remove("t_light", "t_dark");
+      document.body.classList.add(`t_${theme}`);
+    }
   }, [theme]);
 
   return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;

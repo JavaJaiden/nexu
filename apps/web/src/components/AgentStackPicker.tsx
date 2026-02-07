@@ -3,7 +3,7 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, Paragraph, Text, XStack, YStack } from "tamagui";
-import { Check, ChevronDown, Crown, Search, Zap } from "lucide-react";
+import { Bot, Check, ChevronDown, Crown, Layers, Search, Zap } from "lucide-react";
 import type { ModelCard } from "@/lib/modelCatalog";
 import { getCapabilitiesLabel, getProviderIcon } from "@/lib/modelCatalog";
 import { categorizeModelTier, deriveCapabilityTags } from "@/lib/modelTier";
@@ -40,6 +40,8 @@ const DEFAULT_OPTION = {
   capabilities: "Auto routing • Balanced coverage",
   searchText: "default stack nexus routing router agent",
 };
+
+const NEXUS_ROUTING_MODEL_IDS = new Set(["Nexus-Core", "Nexus-Math", "Nexus-Code", "Nexus-Write"]);
 
 function buildSearchText(model: ModelCard) {
   const capabilityTags = deriveCapabilityTags(model).join(" ");
@@ -232,11 +234,24 @@ export default function AgentStackPicker({
   );
 
   const filteredQuick = useMemo(
-    () => options.filter((option) => option.tier === "quick").filter((option) => matchesSearch(option.searchText)),
+    () =>
+      options
+        .filter((option) => option.tier === "quick" && !NEXUS_ROUTING_MODEL_IDS.has(option.id))
+        .filter((option) => matchesSearch(option.searchText)),
+    [options, matchesSearch]
+  );
+  const filteredNexus = useMemo(
+    () =>
+      options
+        .filter((option) => NEXUS_ROUTING_MODEL_IDS.has(option.id))
+        .filter((option) => matchesSearch(option.searchText)),
     [options, matchesSearch]
   );
   const filteredPro = useMemo(
-    () => options.filter((option) => option.tier === "pro").filter((option) => matchesSearch(option.searchText)),
+    () =>
+      options
+        .filter((option) => option.tier === "pro" && !NEXUS_ROUTING_MODEL_IDS.has(option.id))
+        .filter((option) => matchesSearch(option.searchText)),
     [options, matchesSearch]
   );
   const filteredPresets = useMemo(
@@ -245,6 +260,7 @@ export default function AgentStackPicker({
   );
 
   const showDefault = !isSearching || DEFAULT_OPTION.searchText.includes(searchQuery);
+  const showNexusSection = showDefault || filteredNexus.length > 0;
 
   const quickVisible = useMemo(() => {
     if (isSearching || expandedQuick) return filteredQuick;
@@ -260,12 +276,13 @@ export default function AgentStackPicker({
 
   const flatOptions = useMemo(() => {
     const next: Array<{ id: string; kind: "default" | "preset" | "agent" }> = [];
-    if (showDefault) next.push({ id: DEFAULT_OPTION.id, kind: "default" });
     filteredPresets.forEach((preset) => next.push({ id: `preset:${preset.id}`, kind: "preset" }));
+    if (showDefault) next.push({ id: DEFAULT_OPTION.id, kind: "default" });
+    filteredNexus.forEach((option) => next.push({ id: option.id, kind: "agent" }));
     quickVisible.forEach((option) => next.push({ id: option.id, kind: "agent" }));
     proVisible.forEach((option) => next.push({ id: option.id, kind: "agent" }));
     return next;
-  }, [showDefault, filteredPresets, quickVisible, proVisible]);
+  }, [showDefault, filteredNexus, filteredPresets, quickVisible, proVisible]);
 
   const activeOption = flatOptions[activeIndex] ?? null;
 
@@ -380,44 +397,62 @@ export default function AgentStackPicker({
           </YStack>
 
           <YStack flex={1} overflow="scroll" padding="$sm" gap="$lg">
+            {filteredPresets.length > 0 && (
+              <YStack gap="$xs">
+                <SectionHeader icon={<Layers size={14} color="#22C55E" />} title="Projects & Presets" />
+                <YStack gap="$xs">
+                  {filteredPresets.map((preset) => {
+                    const presetSelected =
+                      preset.modelIds.length > 0 &&
+                      preset.modelIds.length === selectedIds.length &&
+                      preset.modelIds.every((modelId) => selectedIds.includes(modelId));
+                    return (
+                      <Row
+                        key={preset.id}
+                        title={preset.name}
+                        subtitle={`${preset.modelIds.length} models`}
+                        selected={presetSelected}
+                        active={activeOption?.id === `preset:${preset.id}`}
+                        onSelect={() => handleSelectPreset(preset)}
+                      />
+                    );
+                  })}
+                </YStack>
+              </YStack>
+            )}
+
+            {showNexusSection && (
+              <YStack gap="$xs">
+                <SectionHeader icon={<Bot size={14} color="#3B82F6" />} title="Nexus Routing" />
+                <YStack gap="$xs">
+                  {showDefault && (
+                    <Row
+                      title={DEFAULT_OPTION.name}
+                      subtitle={DEFAULT_OPTION.capabilities}
+                      selected={isDefault}
+                      active={activeOption?.id === DEFAULT_OPTION.id}
+                      onSelect={() => {
+                        onChange([]);
+                        setOpen(false);
+                      }}
+                    />
+                  )}
+                  {filteredNexus.map((option) => (
+                    <AgentRow
+                      key={option.id}
+                      option={option}
+                      selected={selectedIds.includes(option.id)}
+                      active={activeOption?.id === option.id}
+                      onSelect={() => handleSelectModel(option.id)}
+                    />
+                  ))}
+                </YStack>
+              </YStack>
+            )}
+
             <YStack gap="$xs">
               <SectionHeader icon={<Zap size={14} color="#22C55E" />} title="Quick Agents" />
               <YStack gap="$xs">
-                {showDefault && (
-                  <Row
-                    title={DEFAULT_OPTION.name}
-                    subtitle={DEFAULT_OPTION.capabilities}
-                    selected={isDefault}
-                    active={activeOption?.id === DEFAULT_OPTION.id}
-                    onSelect={() => {
-                      onChange([]);
-                      setOpen(false);
-                    }}
-                  />
-                )}
-                {filteredPresets.length > 0 && (
-                  <YStack gap="$xs">
-                    <Text fontSize={11} color="$textMuted">
-                      Saved stacks
-                    </Text>
-                    {filteredPresets.map((preset) => {
-                      const presetSelected =
-                        preset.modelIds.length > 0 &&
-                        preset.modelIds.length === selectedIds.length &&
-                        preset.modelIds.every((modelId) => selectedIds.includes(modelId));
-                      return (
-                        <Row
-                          key={preset.id}
-                          title={preset.name}
-                          subtitle={`${preset.modelIds.length} models`}
-                          selected={presetSelected}
-                          active={activeOption?.id === `preset:${preset.id}`}
-                          onSelect={() => handleSelectPreset(preset)}
-                        />
-                      );
-                    })}
-                  </YStack>
-                )}
                 {quickVisible.map((option) => (
                   <AgentRow
                     key={option.id}

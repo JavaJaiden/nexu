@@ -20,15 +20,36 @@ import type {
   SaveTranscriptPayload,
   SolveOutput,
   TranscriptItem,
+  SuggestionTask,
+  TaskSuggestionModel,
+  ComposerMode,
 } from "./types";
 import { runModel, runAggregator } from "@/lib/providerAdapters";
-import { fileToAttachment, isPdfFile } from "@/lib/attachments";
+import { fileToAttachment } from "@/lib/attachments";
 
 const DEFAULT_MULTI_MODELS = ["Nexus-Core", "Nexus-Math", "Nexus-Write"];
+const MAX_CONTEXT_MESSAGES = 12;
+const MAX_CONTEXT_CHARS = 6000;
+const BRANCH_DRAFT_KEY = "nexus_studio_branch_draft";
+const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_MAX_TOKENS = 1600;
+const TASK_SUGGESTION_SEEDS: Record<SuggestionTask, string[]> = {
+  code: ["Nexus-Code", "Nexus-Core", "Nexus-Math"],
+  creative: ["Nexus-Write", "Nexus-Core", "Nexus-Code"],
+  analysis: ["Nexus-Core", "Nexus-Math", "Nexus-Write"],
+  general: ["Nexus-Core", "Nexus-Write", "Nexus-Math"],
+};
+
+const TASK_SUGGESTION_KEYWORDS: Record<SuggestionTask, RegExp> = {
+  code: /(code|coding|debug|program|developer|algorithm|software|function|bug|cs)/i,
+  creative: /(write|writing|creative|story|essay|tone|literature|draft|humanities)/i,
+  analysis: /(analysis|reason|research|math|physics|stats|quant|logic|evaluate|problem)/i,
+  general: /(general|homework|q&a|mixed|core)/i,
+};
 
 interface ChatContainerProps {
   chatId: string;
-  mode: "fast" | "deep";
+  mode: ComposerMode;
   preferredModels: string[];
   aggregatorModel: string;
   attachments: Array<{ name: string; type: string; data: string }>;
@@ -44,6 +65,11 @@ interface ChatContainerProps {
   onSaveTranscript?: (payload: SaveTranscriptPayload) => void;
   readOnly?: boolean;
   onRequestNewChat?: () => void;
+  onModeChange?: (mode: ComposerMode) => void;
+  onToggleSteps?: () => void;
+  onToggleCitations?: () => void;
+  onSetAggregatorModel?: (modelId: string) => void;
+  onAddModelsToStack?: (modelIds: string[]) => void;
 }
 
 export default function Chat({
@@ -64,8 +90,15 @@ export default function Chat({
   onSaveTranscript,
   readOnly = false,
   onRequestNewChat,
+  onModeChange,
+  onToggleSteps,
+  onToggleCitations,
+  onSetAggregatorModel,
+  onAddModelsToStack,
 }: ChatContainerProps) {
   const [input, setInput] = useState("");
+  const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
+  const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
   const [timeline, setTimeline] = useState<ChatEntry[]>(initialTimeline ?? []);
   const [runs, setRuns] = useState<MultiModelRun[]>([]);
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
@@ -74,6 +107,8 @@ export default function Chat({
   const runControllersRef = useRef<Map<string, Map<string, AbortController>>>(new Map());
   const runsRef = useRef<MultiModelRun[]>([]);
   const hasReconstructedRef = useRef(false);
+  const hasInitializedSaveRef = useRef(false);
+  const lastSavedSignatureRef = useRef<string | null>(null);
 
   // Keep runs ref in sync
   useEffect(() => {
@@ -82,6 +117,18 @@ export default function Chat({
 
   const hasRunningRun = runs.some((r) => r.status === "running");
   const isBusy = hasRunningRun;
+
+  useEffect(() => {
+    if (readOnly) return;
+    try {
+      const draft = window.sessionStorage.getItem(BRANCH_DRAFT_KEY);
+      if (!draft) return;
+      setInput(draft);
+      window.sessionStorage.removeItem(BRANCH_DRAFT_KEY);
+    } catch {
+      // Ignore session storage failures.
+    }
+  }, [readOnly]);
 
   // Initialize timeline and reconstruct runs from props (for loading history)
   useEffect(() => {
@@ -109,7 +156,9 @@ export default function Chat({
         }
 
         const tools = toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[messageIndex];
-        const solveQuestions = tools?.solveQuestions ?? [];
+        const solveQuestions: SolveOutput[] = Array.isArray(tools?.solveQuestions)
+          ? (tools.solveQuestions as SolveOutput[])
+          : [];
         const aggregateSolve = solveQuestions.find((s: SolveOutput) => s.kind === "aggregate");
         const baseSolves = solveQuestions.filter((s: SolveOutput) => s.kind !== "aggregate");
         const shouldRenderRun = baseSolves.length > 1 || Boolean(aggregateSolve);
@@ -120,8 +169,15 @@ export default function Chat({
         }
 
         const runId = msg.runId ?? `history-${msg.id}`;
-        const modelIds = Array.from(
-          new Set(baseSolves.map((s: SolveOutput) => s.model ?? "unknown").filter(Boolean))
+        const modelIds: string[] = Array.from(
+          new Set(
+            baseSolves
+              .map((solve: SolveOutput): string | undefined => solve.model)
+              .filter(
+                (model: string | undefined): model is string =>
+                  typeof model === "string" && model.trim().length > 0
+              )
+          )
         );
 
         const resultsByModel: Record<string, ModelResult> = {};
@@ -141,7 +197,7 @@ export default function Chat({
           };
         });
 
-        const selectedModels = modelIds.length > 0 ? modelIds : [];
+        const selectedModels: string[] = modelIds.length > 0 ? modelIds : [];
         const durationHint =
           aggregateSolve?.durationMs ?? baseSolves[0]?.durationMs ?? 0;
         const run: MultiModelRun = {
@@ -164,6 +220,9 @@ export default function Chat({
             aggregatorId: aggregateSolve?.model,
             createdAt: Date.now(),
             mode: "fast",
+            temperature: DEFAULT_TEMPERATURE,
+            maxTokens: DEFAULT_MAX_TOKENS,
+            contextMessages: [],
             attachments: [],
           },
           timings: {
@@ -206,14 +265,126 @@ export default function Chat({
     return DEFAULT_MULTI_MODELS;
   }, [preferredModels]);
 
+  const taskSuggestions = useMemo(() => {
+    const models = Array.from(modelMetaMap.values()).filter(Boolean);
+
+    const scoreModelForTask = (model: any, task: SuggestionTask) => {
+      const descriptor = [
+        model?.id,
+        model?.name,
+        model?.focus,
+        model?.routing,
+        ...(Array.isArray(model?.strengths) ? model.strengths : []),
+        ...(Array.isArray(model?.useCases) ? model.useCases : []),
+        model?.provider,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      let score = 0;
+      if (model?.type === "Router") score += 1.5;
+      if (model?.accuracy === "High") score += 1;
+      if (model?.speed === "Fast") score += 0.75;
+      if (model?.costEfficiency === "High") score += 0.25;
+      if (TASK_SUGGESTION_KEYWORDS[task].test(descriptor)) score += 2;
+      if (task === "general" && /core|general/.test(descriptor)) score += 1.5;
+      return score;
+    };
+
+    const buildSuggestions = (task: SuggestionTask): TaskSuggestionModel[] => {
+      const seeded = TASK_SUGGESTION_SEEDS[task]
+        .map((id) => models.find((model: any) => model.id === id))
+        .filter(Boolean);
+      const seededIds = new Set(seeded.map((model: any) => model.id));
+
+      const ranked = models
+        .filter((model: any) => !seededIds.has(model.id))
+        .map((model: any) => ({
+          id: model.id,
+          name: model.name ?? model.id,
+          score: scoreModelForTask(model, task),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .map((model) => ({ id: model.id, name: model.name }));
+
+      const merged = [
+        ...seeded.map((model: any) => ({ id: model.id, name: model.name ?? model.id })),
+        ...ranked,
+      ];
+      return Array.from(new Map(merged.map((model) => [model.id, model])).values()).slice(0, 3);
+    };
+
+    return {
+      code: buildSuggestions("code"),
+      creative: buildSuggestions("creative"),
+      analysis: buildSuggestions("analysis"),
+      general: buildSuggestions("general"),
+    } satisfies Record<SuggestionTask, TaskSuggestionModel[]>;
+  }, [modelMetaMap]);
+
   const updateRun = useCallback((runId: string, updater: (run: MultiModelRun) => MultiModelRun) => {
     setRuns((prev) => prev.map((r) => (r.id === runId ? updater(r) : r)));
   }, []);
+
+  const getCounts = useCallback((results: Record<string, ModelResult>, total: number) => {
+    return Object.values(results).reduce(
+      (acc, item) => {
+        if (item.status === "complete") acc.complete += 1;
+        if (item.status === "error") acc.failed += 1;
+        if (item.status === "cancelled") acc.cancelled += 1;
+        return acc;
+      },
+      { total, complete: 0, failed: 0, cancelled: 0 }
+    );
+  }, []);
+
+  const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
+
+  const buildContextMessages = useCallback(() => {
+    const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
+    timeline.forEach((entry) => {
+      if (entry.kind === "message") {
+        const message = entry.message as ChatMessage;
+        if (
+          (message.role === "user" || message.role === "assistant") &&
+          (message.content ?? "").trim()
+        ) {
+          messages.push({ role: message.role, content: message.content ?? "" });
+        }
+        return;
+      }
+
+      if (entry.kind === "run") {
+        const run = runsById.get(entry.runId);
+        if (run?.aggregated?.text?.trim()) {
+          messages.push({ role: "assistant", content: run.aggregated.text });
+        }
+      }
+    });
+
+    const trimmed = messages.filter((message) => message.content.trim().length > 0);
+    const sliced = trimmed.slice(-MAX_CONTEXT_MESSAGES);
+
+    let totalChars = 0;
+    const limited: typeof sliced = [];
+    for (let i = sliced.length - 1; i >= 0; i -= 1) {
+      const message = sliced[i];
+      const length = message.content.length;
+      if (totalChars + length > MAX_CONTEXT_CHARS && limited.length > 0) break;
+      totalChars += length;
+      limited.push(message);
+    }
+    return limited.reverse();
+  }, [timeline, runsById]);
 
   const startMultiModelRun = useCallback(
     async (question: string, clientMessageId: string) => {
       const runId = crypto.randomUUID();
       const modelIds = effectiveModels;
+      const contextMessages = buildContextMessages();
+      const resolvedRunMode = mode === "none" ? undefined : mode;
+      const executionMode: "fast" | "deep" = mode === "deep" ? "deep" : "fast";
 
       const plan: ExecutionPlan = {
         runId,
@@ -221,7 +392,10 @@ export default function Chat({
         modelIds,
         aggregatorId: aggregatorModel !== "auto" ? aggregatorModel : undefined,
         createdAt: Date.now(),
-        mode,
+        mode: executionMode,
+        temperature,
+        maxTokens,
+        contextMessages,
         attachments: [...attachments],
       };
 
@@ -278,11 +452,13 @@ export default function Chat({
         try {
           const result = await runModel({
             modelId,
-            messages: [{ role: "user", content: question }],
-            mode,
+            messages: [...contextMessages, { role: "user", content: question }],
+            mode: resolvedRunMode,
             stepsMode: showSteps ? "detailed" : "brief",
+            temperature: plan.temperature,
+            maxTokens: plan.maxTokens,
             signal: controller.signal,
-            attachments,
+            attachments: plan.attachments,
           });
 
           updateRun(runId, (prevRun) => {
@@ -303,15 +479,7 @@ export default function Chat({
                 usedModel: result.usedModel,
               },
             };
-            const counts = Object.values(nextResults).reduce(
-              (acc, r) => {
-                if (r.status === "complete") acc.complete++;
-                if (r.status === "error") acc.failed++;
-                if (r.status === "cancelled") acc.cancelled++;
-                return acc;
-              },
-              { total: modelIds.length, complete: 0, failed: 0, cancelled: 0 }
-            );
+            const counts = getCounts(nextResults, modelIds.length);
             return { ...prevRun, resultsByModel: nextResults, counts };
           });
         } catch (error) {
@@ -324,15 +492,7 @@ export default function Chat({
                 errorMessage: (error as Error)?.message ?? "Model failed",
               },
             };
-            const counts = Object.values(nextResults).reduce(
-              (acc, r) => {
-                if (r.status === "complete") acc.complete++;
-                if (r.status === "error") acc.failed++;
-                if (r.status === "cancelled") acc.cancelled++;
-                return acc;
-              },
-              { total: modelIds.length, complete: 0, failed: 0, cancelled: 0 }
-            );
+            const counts = getCounts(nextResults, modelIds.length);
             return { ...prevRun, resultsByModel: nextResults, counts };
           });
         }
@@ -352,7 +512,9 @@ export default function Chat({
             question,
             results: successful.map((r) => ({ modelId: r.modelId, text: r.text })),
             aggregatorModel: plan.aggregatorId,
-            attachments,
+            temperature: plan.temperature,
+            maxTokens: plan.maxTokens,
+            attachments: plan.attachments,
           });
 
           updateRun(runId, (prevRun) => ({
@@ -372,7 +534,19 @@ export default function Chat({
         runControllersRef.current.delete(runId);
       });
     },
-    [effectiveModels, aggregatorModel, mode, attachments, showSteps, updateRun, onAttachmentsChange]
+    [
+      effectiveModels,
+      aggregatorModel,
+      mode,
+      temperature,
+      maxTokens,
+      attachments,
+      showSteps,
+      updateRun,
+      getCounts,
+      onAttachmentsChange,
+      buildContextMessages,
+    ]
   );
 
   const handleSend = useCallback(() => {
@@ -406,7 +580,6 @@ export default function Chat({
       if (!files) return;
       const newAttachments = [];
       for (const file of Array.from(files)) {
-        if (!isPdfFile(file)) continue;
         try {
           const attachment = await fileToAttachment(file);
           newAttachments.push(attachment);
@@ -419,6 +592,24 @@ export default function Chat({
       }
     },
     [attachments, onAttachmentsChange]
+  );
+
+  const handleUseSuggestedAggregator = useCallback(
+    (modelId: string) => {
+      if (readOnly) return;
+      onSetAggregatorModel?.(modelId);
+    },
+    [readOnly, onSetAggregatorModel]
+  );
+
+  const handleAddSuggestedModelsToStack = useCallback(
+    (modelIds: string[]) => {
+      if (readOnly) return;
+      const deduped = Array.from(new Set(modelIds.filter(Boolean)));
+      if (deduped.length === 0) return;
+      onAddModelsToStack?.(deduped);
+    },
+    [readOnly, onAddModelsToStack]
   );
 
   const handleCompareRun = useCallback((runId: string) => {
@@ -437,14 +628,221 @@ export default function Chat({
     (runId: string, modelId: string) => {
       const run = runs.find((r) => r.id === runId);
       const text = run?.resultsByModel[modelId]?.text ?? "";
+      if (!text) return;
       navigator.clipboard.writeText(text);
     },
     [runs]
   );
 
-  const compareRun = compareRunId ? runs.find((r) => r.id === compareRunId) ?? null : null;
+  const handleCopyAggregated = useCallback(
+    (runId: string) => {
+      const run = runs.find((r) => r.id === runId);
+      const text = run?.aggregated?.text ?? "";
+      if (!text) return;
+      navigator.clipboard.writeText(text);
+    },
+    [runs]
+  );
 
-  const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
+  const retryRunModels = useCallback(
+    async (runId: string, modelIdsToRetry: string[]) => {
+      if (readOnly) return;
+      if (runsRef.current.some((item) => item.status === "running")) return;
+
+      const run = runsRef.current.find((item) => item.id === runId);
+      if (!run) return;
+
+      const targetModelIds = Array.from(
+        new Set(modelIdsToRetry.filter((modelId) => run.selectedModels.includes(modelId)))
+      );
+      if (targetModelIds.length === 0) return;
+
+      const contextMessages = run.executionPlan.contextMessages ?? [];
+      const question = run.executionPlan.question || run.queryText;
+      const runMode = run.executionPlan.mode ?? mode;
+      const runTemperature = run.executionPlan.temperature ?? temperature;
+      const runMaxTokens = run.executionPlan.maxTokens ?? maxTokens;
+      const runAttachments = run.executionPlan.attachments ?? [];
+      const stepsMode = showSteps ? "detailed" : "brief";
+
+      updateRun(runId, (prevRun) => {
+        const nextResults = { ...prevRun.resultsByModel };
+        targetModelIds.forEach((modelId) => {
+          nextResults[modelId] = {
+            modelId,
+            status: "running",
+          };
+        });
+        return {
+          ...prevRun,
+          status: "running",
+          aggregated: undefined,
+          resultsByModel: nextResults,
+          counts: getCounts(nextResults, prevRun.selectedModels.length),
+          timings: { startAt: Date.now() },
+        };
+      });
+
+      const controllerMap = new Map<string, AbortController>();
+      runControllersRef.current.set(runId, controllerMap);
+
+      const tasks = targetModelIds.map(async (modelId) => {
+        const controller = new AbortController();
+        controllerMap.set(modelId, controller);
+
+        try {
+          const result = await runModel({
+            modelId,
+            messages: [...contextMessages, { role: "user", content: question }],
+            mode: runMode,
+            stepsMode,
+            temperature: runTemperature,
+            maxTokens: runMaxTokens,
+            signal: controller.signal,
+            attachments: runAttachments,
+          });
+
+          updateRun(runId, (prevRun) => {
+            const nextResults = {
+              ...prevRun.resultsByModel,
+              [modelId]: {
+                modelId,
+                status: "complete" as const,
+                latencyMs: result.latencyMs,
+                tokensIn: result.tokensIn,
+                tokensOut: result.tokensOut,
+                text: result.text,
+                steps: result.steps,
+                confidence: result.confidence,
+                citations: result.citations,
+                selectionReason: result.selectionReason,
+                gatewayNote: result.gatewayNote,
+                usedModel: result.usedModel,
+              },
+            };
+            return {
+              ...prevRun,
+              resultsByModel: nextResults,
+              counts: getCounts(nextResults, prevRun.selectedModels.length),
+            };
+          });
+        } catch (error) {
+          updateRun(runId, (prevRun) => {
+            const nextResults = {
+              ...prevRun.resultsByModel,
+              [modelId]: {
+                modelId,
+                status: controller.signal.aborted ? ("cancelled" as const) : ("error" as const),
+                errorMessage: (error as Error)?.message ?? "Model failed",
+              },
+            };
+            return {
+              ...prevRun,
+              resultsByModel: nextResults,
+              counts: getCounts(nextResults, prevRun.selectedModels.length),
+            };
+          });
+        }
+      });
+
+      await Promise.allSettled(tasks);
+
+      const currentRun = runsRef.current.find((item) => item.id === runId);
+      if (!currentRun) {
+        runControllersRef.current.delete(runId);
+        return;
+      }
+
+      const successful = currentRun.selectedModels
+        .map((modelId) => currentRun.resultsByModel[modelId])
+        .filter((result): result is ModelResult & { text: string } => {
+          return Boolean(result && result.status === "complete" && result.text);
+        });
+
+      if (successful.length > 0) {
+        const aggregate = await runAggregator({
+          question,
+          results: successful.map((result) => ({ modelId: result.modelId, text: result.text })),
+          aggregatorModel: currentRun.executionPlan.aggregatorId,
+          temperature: runTemperature,
+          maxTokens: runMaxTokens,
+          attachments: runAttachments,
+        });
+
+        updateRun(runId, (prevRun) => ({
+          ...prevRun,
+          status: "complete",
+          aggregated: aggregate,
+          timings: { ...prevRun.timings, endAt: Date.now() },
+        }));
+      } else {
+        updateRun(runId, (prevRun) => ({
+          ...prevRun,
+          status: "error",
+          timings: { ...prevRun.timings, endAt: Date.now() },
+        }));
+      }
+
+      runControllersRef.current.delete(runId);
+    },
+    [readOnly, mode, temperature, maxTokens, showSteps, updateRun, getCounts]
+  );
+
+  const handleRetryModel = useCallback(
+    (runId: string, modelId: string) => {
+      retryRunModels(runId, [modelId]);
+    },
+    [retryRunModels]
+  );
+
+  const handleRetryAll = useCallback(
+    (runId: string) => {
+      const run = runsRef.current.find((item) => item.id === runId);
+      if (!run) return;
+      retryRunModels(runId, run.selectedModels);
+    },
+    [retryRunModels]
+  );
+
+  const branchWithText = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      if (onRequestNewChat) {
+        try {
+          window.sessionStorage.setItem(BRANCH_DRAFT_KEY, trimmed);
+        } catch {
+          // Ignore session storage failures.
+        }
+        onRequestNewChat();
+        return;
+      }
+
+      setInput(trimmed);
+    },
+    [onRequestNewChat]
+  );
+
+  const handleBranchModel = useCallback(
+    (runId: string, modelId: string) => {
+      const run = runsRef.current.find((item) => item.id === runId);
+      const text = run?.resultsByModel[modelId]?.text ?? "";
+      branchWithText(text);
+    },
+    [branchWithText]
+  );
+
+  const handleBranchAggregated = useCallback(
+    (runId: string) => {
+      const run = runsRef.current.find((item) => item.id === runId);
+      const text = run?.aggregated?.text ?? "";
+      branchWithText(text);
+    },
+    [branchWithText]
+  );
+
+  const compareRun = compareRunId ? runs.find((r) => r.id === compareRunId) ?? null : null;
 
   const transcript = useMemo<TranscriptItem[]>(() => {
     if (timeline.length === 0) return [];
@@ -543,7 +941,16 @@ export default function Chat({
 
   useEffect(() => {
     if (!onSaveTranscript || !hasUserMessage) return;
-    onSaveTranscript({ transcript, models: historyModels, mode, hasRun: hasRunEntries });
+    const signature = JSON.stringify(transcript);
+    const persistedMode: "fast" | "deep" = mode === "deep" ? "deep" : "fast";
+    if (!hasInitializedSaveRef.current) {
+      hasInitializedSaveRef.current = true;
+      lastSavedSignatureRef.current = signature;
+      return;
+    }
+    if (signature === lastSavedSignatureRef.current) return;
+    lastSavedSignatureRef.current = signature;
+    onSaveTranscript({ transcript, models: historyModels, mode: persistedMode, hasRun: hasRunEntries });
   }, [onSaveTranscript, transcript, historyModels, mode, hasRunEntries, hasUserMessage]);
 
   return (
@@ -563,6 +970,11 @@ export default function Chat({
           onCompareRun={handleCompareRun}
           onToggleRunIndividual={handleToggleRunIndividual}
           onCopyModel={handleCopyModel}
+          onCopyAggregated={handleCopyAggregated}
+          onRetryModel={handleRetryModel}
+          onRetryAll={handleRetryAll}
+          onBranchModel={handleBranchModel}
+          onBranchAggregated={handleBranchAggregated}
         />
       </YStack>
 
@@ -601,11 +1013,24 @@ export default function Chat({
         onStop={handleStop}
         isBusy={isBusy}
         isReadOnly={readOnly}
+        mode={mode}
+        onModeChange={(nextMode) => onModeChange?.(nextMode)}
+        showSteps={showSteps}
+        onToggleSteps={() => onToggleSteps?.()}
+        showCitations={showCitations}
+        onToggleCitations={() => onToggleCitations?.()}
         attachments={attachments}
         onRemoveAttachment={(index) =>
           onAttachmentsChange(attachments.filter((_, i) => i !== index))
         }
         onFilesSelected={handleFileSelect}
+        taskSuggestions={taskSuggestions}
+        onUseSuggestedAggregator={handleUseSuggestedAggregator}
+        onAddSuggestedModelsToStack={handleAddSuggestedModelsToStack}
+        temperature={temperature}
+        maxTokens={maxTokens}
+        onTemperatureChange={setTemperature}
+        onMaxTokensChange={setMaxTokens}
         placeholder={
           readOnly ? "Viewing history. Click New Chat to ask a question." : undefined
         }
