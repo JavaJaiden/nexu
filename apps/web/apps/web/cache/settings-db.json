@@ -1,0 +1,88 @@
+{
+  "users": [
+    {
+      "id": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "email": "22jnguyencollege@gmail.com",
+      "name": "Jaiden Nguyen",
+      "phone": "+14435544855",
+      "avatarUrl": "https://img.clerk.com/eyJ0eXBlIjoiZGVmYXVsdCIsImlpZCI6Imluc18zNVNpdGRxT2tQbkN3eGs4OXRaa2VYNDM3S2MiLCJyaWQiOiJ1c2VyXzM1aUpvR0Nrb3g5Z0oyUmpFbVYxT2kxa3BYWCIsImluaXRpYWxzIjoiSk4ifQ",
+      "createdAt": "2026-02-11T05:50:42.546Z",
+      "updatedAt": "2026-02-11T06:01:33.761Z"
+    }
+  ],
+  "organizations": [
+    {
+      "id": "28b92e00-5cb5-49a4-9917-7c99abd969bd",
+      "name": "poop",
+      "slug": "poop",
+      "ownerId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "currentPlan": "free",
+      "createdAt": "2026-02-11T05:59:29.144Z",
+      "updatedAt": "2026-02-11T05:59:29.144Z"
+    }
+  ],
+  "organizationMembers": [
+    {
+      "id": "4ff13838-20d4-482a-85dd-f10ad60f9fb1",
+      "organizationId": "28b92e00-5cb5-49a4-9917-7c99abd969bd",
+      "userId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "role": "owner",
+      "createdAt": "2026-02-11T05:59:29.144Z"
+    }
+  ],
+  "notificationSettings": [
+    {
+      "userId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "transactionalEmails": true,
+      "weeklySummary": true,
+      "securityEmails": true,
+      "billingAlerts": true,
+      "marketingNewsletter": false,
+      "productUpdates": true,
+      "createdAt": "2026-02-11T05:50:42.546Z",
+      "updatedAt": "2026-02-11T05:50:42.546Z"
+    }
+  ],
+  "apiKeys": [],
+  "creditAccounts": [
+    {
+      "organizationId": "28b92e00-5cb5-49a4-9917-7c99abd969bd",
+      "balanceCents": 0,
+      "autoReloadEnabled": false,
+      "reloadThresholdCents": 1000,
+      "reloadAmountCents": 5000,
+      "monthlyMaxCents": 50000,
+      "createdAt": "2026-02-11T05:59:29.144Z",
+      "updatedAt": "2026-02-11T05:59:29.144Z"
+    }
+  ],
+  "transactions": [],
+  "invitations": [
+    {
+      "id": "7c791da3-f79c-4fa7-9c69-7059378c511d",
+      "organizationId": "28b92e00-5cb5-49a4-9917-7c99abd969bd",
+      "email": "matthewpallan1@gmail.com",
+      "role": "member",
+      "invitedByUserId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "status": "pending",
+      "createdAt": "2026-02-11T05:59:29.146Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "caf94dd0-b00b-414e-a6ed-7e0c2f5b960e",
+      "userId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "label": "Current session",
+      "createdAt": "2026-02-11T05:50:42.546Z",
+      "lastActiveAt": "2026-02-11T06:01:33.761Z"
+    }
+  ],
+  "connections": [
+    {
+      "id": "cca89bb3-3acb-4140-b865-ee21e068eec3",
+      "userId": "user_35iJoGCkox9gJ2RjEmV1Oi1kpXX",
+      "provider": "google",
+      "connectedAt": "2026-02-11T05:50:42.546Z"
+    }
+  ]
+}

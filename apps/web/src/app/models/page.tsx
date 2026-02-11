@@ -43,8 +43,6 @@ import {
   ChevronUp,
   BarChart3,
   Award,
-  Sun,
-  Moon,
 } from "lucide-react";
 import Header from "@/components/Header";
 import { loadHistory, type HistoryEntry } from "@/lib/historyStore";
@@ -256,9 +254,10 @@ function formatNumber(num: number): string {
 // ============================================================================
 
 function ModelHubContent() {
+  const MODEL_PANEL_TRANSITION_MS = 320;
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { theme, setTheme } = useThemeSetting();
+  const { theme } = useThemeSetting();
   const isDark = theme === "dark";
 
   // Data
@@ -280,6 +279,9 @@ function ModelHubContent() {
   const [capabilityFilters, setCapabilityFilters] = useState<Set<string>>(new Set());
   const [priceFilters, setPriceFilters] = useState<Set<string>>(new Set());
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [panelModelId, setPanelModelId] = useState<string | null>(null);
+  const [isModelPanelVisible, setIsModelPanelVisible] = useState(false);
+  const [selectionPulseId, setSelectionPulseId] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMode, setChatMode] = useState<ChatMode>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -295,6 +297,9 @@ function ModelHubContent() {
   const filterPanelRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const chatFileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectionPulseTimeoutRef = useRef<number | null>(null);
+  const panelUnmountTimeoutRef = useRef<number | null>(null);
+  const panelOpenRafRef = useRef<number | null>(null);
 
   // Theme colors
   const colors = useMemo(
@@ -353,6 +358,76 @@ function ModelHubContent() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [filterOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (selectionPulseTimeoutRef.current !== null) {
+        window.clearTimeout(selectionPulseTimeoutRef.current);
+      }
+      if (panelUnmountTimeoutRef.current !== null) {
+        window.clearTimeout(panelUnmountTimeoutRef.current);
+      }
+      if (panelOpenRafRef.current !== null) {
+        window.cancelAnimationFrame(panelOpenRafRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeModelId) {
+      if (panelUnmountTimeoutRef.current !== null) {
+        window.clearTimeout(panelUnmountTimeoutRef.current);
+        panelUnmountTimeoutRef.current = null;
+      }
+      if (panelModelId === null) {
+        // Ensure the panel mounts in an off-screen state, then animates in.
+        setIsModelPanelVisible(false);
+      } else {
+        setIsModelPanelVisible(true);
+      }
+      setPanelModelId((current) => (current === activeModelId ? current : activeModelId));
+      return;
+    }
+    if (!panelModelId) return;
+    if (panelOpenRafRef.current !== null) {
+      window.cancelAnimationFrame(panelOpenRafRef.current);
+      panelOpenRafRef.current = null;
+    }
+    setIsModelPanelVisible(false);
+    panelUnmountTimeoutRef.current = window.setTimeout(() => {
+      setPanelModelId(null);
+      panelUnmountTimeoutRef.current = null;
+    }, MODEL_PANEL_TRANSITION_MS);
+  }, [activeModelId, panelModelId, MODEL_PANEL_TRANSITION_MS]);
+
+  useEffect(() => {
+    if (!panelModelId) return;
+    if (panelOpenRafRef.current !== null) {
+      window.cancelAnimationFrame(panelOpenRafRef.current);
+      panelOpenRafRef.current = null;
+    }
+    panelOpenRafRef.current = window.requestAnimationFrame(() => {
+      setIsModelPanelVisible(true);
+      panelOpenRafRef.current = null;
+    });
+    return () => {
+      if (panelOpenRafRef.current !== null) {
+        window.cancelAnimationFrame(panelOpenRafRef.current);
+        panelOpenRafRef.current = null;
+      }
+    };
+  }, [panelModelId]);
+
+  useEffect(() => {
+    if (!panelModelId) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActiveModelId(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [panelModelId]);
 
   const appendChatDictationText = useCallback((spokenText: string) => {
     setChatInput((current) => {
@@ -483,7 +558,7 @@ function ModelHubContent() {
   const priceTiers = ["free", "budget", "standard", "premium", "enterprise"];
 
   const activeFiltersCount = providerFilters.size + capabilityFilters.size + priceFilters.size;
-  const activeModel = activeModelId ? modelRows.find((r) => r.id === activeModelId) : null;
+  const activeModel = panelModelId ? modelRows.find((r) => r.id === panelModelId) : null;
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -501,6 +576,14 @@ function ModelHubContent() {
       else next.add(id);
       return next;
     });
+    setSelectionPulseId(id);
+    if (selectionPulseTimeoutRef.current !== null) {
+      window.clearTimeout(selectionPulseTimeoutRef.current);
+    }
+    selectionPulseTimeoutRef.current = window.setTimeout(() => {
+      setSelectionPulseId((current) => (current === id ? null : current));
+      selectionPulseTimeoutRef.current = null;
+    }, 360);
   };
 
   const clearFilters = () => {
@@ -648,20 +731,39 @@ function ModelHubContent() {
     return colors[tier] || colors.textSecondary;
   };
 
+  const cardTransitionStyle = {
+    transition:
+      "transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease, background-color 220ms ease",
+    willChange: "transform, box-shadow, background-color",
+  } as const;
+
+  const buttonTransitionStyle = {
+    transition:
+      "transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease, background-color 220ms ease",
+    willChange: "transform, box-shadow, background-color",
+  } as const;
+
   return (
     <YStack flex={1} backgroundColor={colors.bg} minHeight="100vh">
       <Header />
 
       <XStack flex={1} overflow="hidden">
         {/* Left Sidebar - Collapsible Chat */}
-        {isChatOpen && (
-          <YStack
-            width={360}
-            minWidth={360}
-            backgroundColor={colors.bgSecondary}
-            borderRightWidth={1}
-            borderColor={colors.border}
-          >
+        <YStack
+          width={isChatOpen ? 360 : 0}
+          minWidth={isChatOpen ? 360 : 0}
+          opacity={isChatOpen ? 1 : 0}
+          pointerEvents={isChatOpen ? "auto" : "none"}
+          backgroundColor={colors.bgSecondary}
+          borderRightWidth={1}
+          borderColor={colors.border}
+          overflow="hidden"
+          style={{
+            transition:
+              "width 320ms cubic-bezier(0.22, 1, 0.36, 1), min-width 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1)",
+            transform: isChatOpen ? "translateX(0)" : "translateX(-20px)",
+          }}
+        >
             {/* Chat Header */}
             <XStack
               padding="$md"
@@ -682,6 +784,10 @@ function ModelHubContent() {
                 borderWidth={0}
                 color={colors.textMuted}
                 onPress={() => setIsChatOpen(false)}
+                animation="fast"
+                pressStyle={{ scale: 0.94 }}
+                hoverStyle={{ scale: 1.03 }}
+                style={buttonTransitionStyle}
                 icon={<X size={18} />}
               />
             </XStack>
@@ -696,6 +802,10 @@ function ModelHubContent() {
                 borderRadius="$md"
                 onPress={() => setChatMode("discover")}
                 icon={<Sparkles size={14} />}
+                animation="fast"
+                pressStyle={{ scale: 0.97 }}
+                hoverStyle={{ scale: 1.01 }}
+                style={buttonTransitionStyle}
               >
                 Find Model
               </Button>
@@ -707,6 +817,10 @@ function ModelHubContent() {
                 borderRadius="$md"
                 onPress={() => setChatMode("compare")}
                 icon={<Layers size={14} />}
+                animation="fast"
+                pressStyle={{ scale: 0.97 }}
+                hoverStyle={{ scale: 1.01 }}
+                style={buttonTransitionStyle}
               >
                 Compare
               </Button>
@@ -777,6 +891,10 @@ function ModelHubContent() {
                             borderRadius="$md"
                             onPress={() => setActiveModelId(rec.id)}
                             justifyContent="flex-start"
+                            animation="fast"
+                            pressStyle={{ scale: 0.98 }}
+                            hoverStyle={{ y: -1 }}
+                            style={buttonTransitionStyle}
                           >
                             <YStack alignItems="flex-start" gap="$xs">
                               <XStack alignItems="center" gap="$xs">
@@ -857,6 +975,10 @@ function ModelHubContent() {
                     color={colors.textMuted}
                     borderRadius="$md"
                     onPress={() => chatFileInputRef.current?.click()}
+                    animation="fast"
+                    pressStyle={{ scale: 0.94 }}
+                    hoverStyle={{ scale: 1.02 }}
+                    style={buttonTransitionStyle}
                     icon={<Paperclip size={16} />}
                   />
                   <Button
@@ -869,6 +991,10 @@ function ModelHubContent() {
                     onPress={toggleChatDictation}
                     disabled={!supportsChatDictation}
                     opacity={supportsChatDictation ? 1 : 0.5}
+                    animation="fast"
+                    pressStyle={{ scale: 0.94 }}
+                    hoverStyle={{ scale: supportsChatDictation ? 1.02 : 1 }}
+                    style={buttonTransitionStyle}
                     icon={isChatDictating ? <MicOff size={16} /> : <Mic size={16} />}
                   />
                 </XStack>
@@ -904,46 +1030,67 @@ function ModelHubContent() {
                   borderRadius="$md"
                   onPress={handleChatSend}
                   disabled={!chatInput.trim()}
+                  animation="fast"
+                  pressStyle={{ scale: 0.96 }}
+                  hoverStyle={{ scale: chatInput.trim() ? 1.02 : 1 }}
+                  style={{
+                    ...buttonTransitionStyle,
+                    boxShadow: isDark
+                      ? "0 8px 18px rgba(34, 197, 94, 0.28)"
+                      : "0 8px 18px rgba(34, 197, 94, 0.18)",
+                  }}
                   icon={<Send size={18} />}
                 />
               </XStack>
             </YStack>
           </YStack>
-        )}
 
-        {/* Chat Toggle Button (when closed) */}
-        {!isChatOpen && (
-          <YStack
-            position="absolute"
-            left={0}
-            top={80}
-            zIndex={100}
+        {/* Chat Toggle Button */}
+        <YStack
+          position="absolute"
+          left={0}
+          top={80}
+          zIndex={100}
+          opacity={isChatOpen ? 0 : 1}
+          pointerEvents={isChatOpen ? "none" : "auto"}
+          style={{
+            transition: "opacity 200ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1)",
+            transform: isChatOpen ? "translateX(-24px)" : "translateX(0)",
+          }}
+        >
+          <Button
+            size="$3"
+            backgroundColor={colors.accent}
+            color="black"
+            borderTopLeftRadius={0}
+            borderBottomLeftRadius={0}
+            borderTopRightRadius="$md"
+            borderBottomRightRadius="$md"
+            onPress={() => setIsChatOpen(true)}
+            icon={<ChevronRight size={20} />}
+            animation="medium"
+            pressStyle={{ scale: 0.95 }}
+            hoverStyle={{ scale: 1.03, x: 2 }}
+            style={{
+              ...buttonTransitionStyle,
+              boxShadow: isDark
+                ? "0 10px 24px rgba(34, 197, 94, 0.32)"
+                : "0 10px 24px rgba(34, 197, 94, 0.22)",
+            }}
           >
-            <Button
-              size="$3"
-              backgroundColor={colors.accent}
-              color="black"
-              borderTopLeftRadius={0}
-              borderBottomLeftRadius={0}
-              borderTopRightRadius="$md"
-              borderBottomRightRadius="$md"
-              onPress={() => setIsChatOpen(true)}
-              icon={<ChevronRight size={20} />}
-            >
-              <YStack alignItems="flex-start">
-                <Text fontSize={12} fontWeight="600" color="black">
-                  Model Assistant
-                </Text>
-                <Text fontSize={10} color="rgba(0,0,0,0.6)">
-                  Find & Compare
-                </Text>
-              </YStack>
-            </Button>
-          </YStack>
-        )}
+            <YStack alignItems="flex-start">
+              <Text fontSize={12} fontWeight="600" color="black">
+                Model Assistant
+              </Text>
+              <Text fontSize={10} color="rgba(0,0,0,0.6)">
+                Find & Compare
+              </Text>
+            </YStack>
+          </Button>
+        </YStack>
 
         {/* Main Content */}
-        <YStack flex={1} padding="$lg" maxWidth={activeModelId ? 1000 : 1400} marginHorizontal="auto">
+        <YStack flex={1} padding="$lg" maxWidth={1400} marginHorizontal="auto">
           {/* Header */}
           <YStack gap="$xs" marginBottom="$lg">
             <XStack alignItems="center" gap="$sm" justifyContent="space-between">
@@ -953,18 +1100,6 @@ function ModelHubContent() {
                   Model Leaderboard
                 </H1>
               </XStack>
-              <Button
-                size="$3"
-                backgroundColor={colors.bgTertiary}
-                color={colors.text}
-                borderWidth={1}
-                borderColor={colors.border}
-                borderRadius="$md"
-                onPress={() => setTheme(isDark ? "light" : "dark")}
-                icon={isDark ? <Sun size={18} /> : <Moon size={18} />}
-              >
-                {isDark ? "Light" : "Dark"}
-              </Button>
             </XStack>
             <Paragraph color={colors.textMuted} fontSize={15} maxWidth={600}>
               Compare AI models across coding, math, and reasoning benchmarks. Click any model for detailed insights.
@@ -1220,6 +1355,10 @@ function ModelHubContent() {
                   borderRadius="$md"
                   onPress={() => setShowSavePreset(true)}
                   icon={<Sparkles size={16} />}
+                  animation="fast"
+                  pressStyle={{ scale: 0.96 }}
+                  hoverStyle={{ y: -1 }}
+                  style={buttonTransitionStyle}
                 >
                   Save Preset
                 </Button>
@@ -1232,6 +1371,10 @@ function ModelHubContent() {
                 disabled={selectedIds.size < 2}
                 onPress={handleCompare}
                 icon={<Layers size={16} />}
+                animation="fast"
+                pressStyle={{ scale: selectedIds.size >= 2 ? 0.96 : 1 }}
+                hoverStyle={{ y: selectedIds.size >= 2 ? -1 : 0 }}
+                style={buttonTransitionStyle}
               >
                 Compare in Studio
               </Button>
@@ -1308,14 +1451,43 @@ function ModelHubContent() {
 
             {/* Table Rows */}
             <YStack maxHeight={600} overflow="scroll">
-              {modelRows.map((row) => (
+              {modelRows.map((row) => {
+                const isSelectionPulsing = selectionPulseId === row.id;
+                return (
                 <XStack
                   key={row.id}
                   padding="$md"
-                  backgroundColor={row.isSelected ? colors.accentBg : "transparent"}
+                  backgroundColor={
+                    isSelectionPulsing
+                      ? isDark
+                        ? "rgba(34, 197, 94, 0.2)"
+                        : "rgba(34, 197, 94, 0.16)"
+                      : row.isSelected
+                        ? colors.accentBg
+                        : "transparent"
+                  }
                   borderBottomWidth={1}
                   borderColor={colors.border}
-                  hoverStyle={{ backgroundColor: row.isSelected ? colors.accentBg : colors.bgSecondary }}
+                  animation={isSelectionPulsing ? "medium" : "fast"}
+                  hoverStyle={{
+                    backgroundColor: row.isSelected ? colors.accentBg : colors.bgSecondary,
+                    y: -1,
+                  }}
+                  pressStyle={{ scale: 0.998, y: 0 }}
+                  style={{
+                    ...cardTransitionStyle,
+                    cursor: "pointer",
+                    transform: isSelectionPulsing ? "translateY(-2px) scale(1.004)" : undefined,
+                    boxShadow: isSelectionPulsing
+                      ? isDark
+                        ? "0 0 0 1px rgba(34, 197, 94, 0.56), 0 10px 24px rgba(34, 197, 94, 0.34)"
+                        : "0 0 0 1px rgba(34, 197, 94, 0.42), 0 10px 20px rgba(34, 197, 94, 0.2)"
+                      : row.isSelected
+                        ? isDark
+                          ? "0 6px 18px rgba(34, 197, 94, 0.24)"
+                          : "0 6px 16px rgba(34, 197, 94, 0.14)"
+                        : "none",
+                  }}
                   onPress={() => setActiveModelId(row.id)}
                 >
                   {/* Rank & Selection */}
@@ -1339,6 +1511,21 @@ function ModelHubContent() {
                       onPress={(e) => {
                         e.stopPropagation();
                         toggleSelection(row.id);
+                      }}
+                      animation="fast"
+                      pressStyle={{ scale: 0.9 }}
+                      hoverStyle={{
+                        scale: 1.05,
+                        borderColor: row.isSelected ? colors.accent : colors.textSecondary,
+                      }}
+                      style={{
+                        ...buttonTransitionStyle,
+                        transform: isSelectionPulsing ? "scale(1.08)" : undefined,
+                        boxShadow: isSelectionPulsing
+                          ? isDark
+                            ? "0 6px 14px rgba(34, 197, 94, 0.34)"
+                            : "0 6px 14px rgba(34, 197, 94, 0.2)"
+                          : "none",
                       }}
                     >
                       {row.isSelected && <Check size={16} color="black" />}
@@ -1410,7 +1597,7 @@ function ModelHubContent() {
                     </YStack>
                   </XStack>
                 </XStack>
-              ))}
+              )})}
             </YStack>
 
             {modelRows.length === 0 && (
@@ -1432,21 +1619,27 @@ function ModelHubContent() {
           </YStack>
 
           {/* Footer Info */}
-          <XStack marginTop="$lg" justifyContent="space-between" alignItems="flex-start">
-            <YStack gap="$xs" maxWidth={400}>
+          <XStack
+            marginTop="$lg"
+            justifyContent="space-between"
+            alignItems="flex-start"
+            flexWrap="wrap"
+            gap="$sm"
+          >
+            <YStack gap="$xs" flex={1} minWidth={260} maxWidth={520}>
               <XStack alignItems="center" gap="$xs">
                 <Info size={14} color={colors.textMuted} />
                 <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
                   About Scores
                 </Text>
               </XStack>
-              <Text fontSize={12} color={colors.textSecondary} lineHeight={1.5}>
+              <Text fontSize={12} color={colors.textSecondary} lineHeight={18}>
                 Scores are benchmark ratings from 0-100 based on standardized tests. 
                 Higher scores indicate better performance. Click any model for detailed insights.
               </Text>
             </YStack>
 
-            <Text fontSize={12} color={colors.textSecondary}>
+            <Text fontSize={12} color={colors.textSecondary} marginLeft="auto" flexShrink={0}>
               {`Showing ${modelRows.length} of ${leaderboardEligibleModels.length} models`}
             </Text>
           </XStack>
@@ -1568,7 +1761,7 @@ function ModelHubContent() {
           </>
         )}
 
-        {activeModel && (
+        {panelModelId && activeModel && (
           <>
             {/* Backdrop */}
             <div
@@ -1580,6 +1773,9 @@ function ModelHubContent() {
                 bottom: 0,
                 backgroundColor: isDark ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.4)",
                 zIndex: 100,
+                opacity: isModelPanelVisible ? 1 : 0,
+                transition: "opacity 220ms ease",
+                pointerEvents: isModelPanelVisible ? "auto" : "none",
               }}
               onClick={() => setActiveModelId(null)}
             />
@@ -1598,6 +1794,10 @@ function ModelHubContent() {
                 overflow: "auto",
                 display: "flex",
                 flexDirection: "column",
+                transform: isModelPanelVisible ? "translateX(0)" : "translateX(100%)",
+                opacity: isModelPanelVisible ? 1 : 0.96,
+                transition: `transform ${MODEL_PANEL_TRANSITION_MS}ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease`,
+                willChange: "transform, opacity",
               }}
             >
               {/* Panel Header */}

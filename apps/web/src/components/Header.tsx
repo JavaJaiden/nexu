@@ -1,17 +1,17 @@
 "use client";
 
-import { useUser, SignOutButton, useAuth } from "@clerk/nextjs";
+import { useUser, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Button, Text, XStack, YStack, Avatar } from "tamagui";
-import { FlaskConical, LayoutDashboard, Moon, Sun, Database, LogOut } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Button, Text, XStack } from "tamagui";
+import { FlaskConical, LayoutDashboard, Moon, Sun, Database } from "lucide-react";
 import { useThemeSetting } from "@/lib/themeContext";
+import ProfileDropdown from "@/components/ProfileDropdown";
 
 export default function Header() {
-  const { user, isLoaded } = useUser();
+  const { isLoaded } = useUser();
   const { isSignedIn } = useAuth();
   const pathname = usePathname();
-  const router = useRouter();
   const { theme, setTheme } = useThemeSetting();
   const navItems = [
     { label: "Studio", href: "/studio", icon: LayoutDashboard },
@@ -76,19 +76,6 @@ export default function Header() {
           </XStack>
         ) : isSignedIn ? (
           <>
-            {pathname !== "/studio" && (
-              <Link href="/studio">
-                <Button
-                  size="$3"
-                  backgroundColor="$color"
-                  color="$background"
-                  borderRadius="$sm"
-                  pressStyle={{ opacity: 0.8 }}
-                >
-                  Studio
-                </Button>
-              </Link>
-            )}
             <Button
               size="$3"
               backgroundColor="transparent"
@@ -99,37 +86,7 @@ export default function Header() {
             >
               {theme === "dark" ? <Sun size={16} color="#f5f5f5" /> : <Moon size={16} color="#111" />}
             </Button>
-            <XStack alignItems="center" gap="$sm">
-              {user?.imageUrl ? (
-                <Avatar circular size="$3">
-                  <Avatar.Image src={user?.imageUrl} />
-                  <Avatar.Fallback backgroundColor="$backgroundSecondary" />
-                </Avatar>
-              ) : (
-                <YStack
-                  width={32}
-                  height={32}
-                  borderRadius={16}
-                  backgroundColor="$backgroundSecondary"
-                  alignItems="center"
-                  justifyContent="center"
-                >
-                  <Text fontSize={14} fontWeight="500" color="$color">
-                    {user?.firstName?.[0] || "U"}
-                  </Text>
-                </YStack>
-              )}
-              <SignOutButton>
-                <Button
-                  size="$3"
-                  backgroundColor="transparent"
-                  borderWidth={0}
-                  paddingHorizontal="$sm"
-                >
-                  <LogOut size={18} color="#666" />
-                </Button>
-              </SignOutButton>
-            </XStack>
+            <ProfileDropdown />
           </>
         ) : (
           <XStack gap="$sm">

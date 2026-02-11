@@ -47,7 +47,7 @@ export function UserNav({ name, email, image }: UserNavProps) {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <Link href="/notes">
+        <Link href="/dashboard">
           <DropdownMenuItem className="hover:cursor-pointer hover:bg-gray-200">
             <Paintbrush2 className="mr-2 h-4 w-4 text-black" />
             <span className="text-black">Dashboard</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -16,6 +16,12 @@ import {
   Beaker,
   Upload,
   FileText,
+  FileImage,
+  FileVideo,
+  FileAudio2,
+  FileCode2,
+  FileSpreadsheet,
+  FileArchive,
   Database,
   Bot,
   Workflow,
@@ -34,9 +40,10 @@ import {
   Filter,
   Settings,
   Trash2,
-  Edit3,
   Play,
   Layers,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 import Header from "@/components/Header";
 import { useThemeSetting } from "@/lib/themeContext";
@@ -70,7 +77,47 @@ interface Asset {
   rating?: number;
   icon?: string;
   models?: string[];
+  origin?: "preset" | "remote";
+  file?: {
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    storageKey: string;
+    isPublic: boolean;
+  };
 }
+
+type RemoteAsset = {
+  id: string;
+  name: string;
+  type: string;
+  scope: "private" | "org";
+  description?: string;
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+  useCount?: number;
+  rating?: number | null;
+  payload?: Record<string, unknown>;
+};
+
+type UploadQueueItem = {
+  id: string;
+  file: File;
+  displayName: string;
+  tagsInput: string;
+  description: string;
+  isPublic: boolean;
+  status: "queued" | "uploading" | "uploaded" | "error";
+  progress: number;
+  error?: string;
+};
+
+type UploadToast = {
+  id: number;
+  kind: "success" | "error";
+  message: string;
+};
 
 // ============================================================================
 // MOCK DATA & UTILS
@@ -116,7 +163,104 @@ function presetsToAssets(presets: LabPreset[]): Asset[] {
     author: "You",
     usageCount: 0,
     models: preset.models,
+    origin: "preset",
   }));
+}
+
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+function getNameWithoutExtension(filename: string) {
+  const dot = filename.lastIndexOf(".");
+  if (dot <= 0) return filename;
+  return filename.slice(0, dot);
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function parseTags(input: string) {
+  return Array.from(
+    new Set(
+      input
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function getFileIconByMimeType(mimeType: string) {
+  if (mimeType.startsWith("image/")) return FileImage;
+  if (mimeType.startsWith("video/")) return FileVideo;
+  if (mimeType.startsWith("audio/")) return FileAudio2;
+  if (
+    mimeType.includes("spreadsheet") ||
+    mimeType.includes("csv") ||
+    mimeType.includes("excel")
+  ) {
+    return FileSpreadsheet;
+  }
+  if (
+    mimeType.includes("json") ||
+    mimeType.includes("xml") ||
+    mimeType.includes("javascript") ||
+    mimeType.includes("typescript")
+  ) {
+    return FileCode2;
+  }
+  if (
+    mimeType.includes("zip") ||
+    mimeType.includes("compressed") ||
+    mimeType.includes("tar")
+  ) {
+    return FileArchive;
+  }
+  return FileText;
+}
+
+function mapRemoteAssetToUi(asset: RemoteAsset): Asset | null {
+  if (asset.type !== "file") return null;
+  const payload = asset.payload ?? {};
+  const filename = typeof payload.filename === "string" ? payload.filename : asset.name;
+  const mimeType =
+    typeof payload.mimeType === "string" && payload.mimeType
+      ? payload.mimeType
+      : "application/octet-stream";
+  const sizeBytes = typeof payload.sizeBytes === "number" ? payload.sizeBytes : 0;
+  const storageKey = typeof payload.storageKey === "string" ? payload.storageKey : asset.id;
+  const isPublic = Boolean(payload.isPublic);
+
+  return {
+    id: asset.id,
+    name: asset.name,
+    type: "file",
+    scope: asset.scope === "org" ? "organization" : "private",
+    complexity: "simple",
+    description: asset.description || `${filename} • ${formatBytes(sizeBytes)}`,
+    tags: Array.isArray(asset.tags) ? asset.tags : [],
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt,
+    author: "You",
+    usageCount: asset.useCount ?? 0,
+    rating: asset.rating ?? undefined,
+    origin: "remote",
+    file: {
+      filename,
+      mimeType,
+      sizeBytes,
+      storageKey,
+      isPublic,
+    },
+  };
 }
 
 // ============================================================================

@@ -22,6 +22,22 @@ const MAX_HEIGHT = 200;
 const MIN_HEIGHT = 56;
 const ACTIVE_MENU_BG = "var(--app-accent, #22C55E)";
 const ACTIVE_MENU_TEXT = "#0A0A0A";
+const FLAT_BUTTON_STYLE = {
+  boxShadow: "none",
+  filter: "none",
+  backgroundImage: "none",
+  textShadow: "none",
+  backdropFilter: "none",
+} as const;
+
+const FLAT_BUTTON_INTERACTION_STYLE = {
+  shadowColor: "transparent",
+  shadowOpacity: 0,
+  shadowRadius: 0,
+  boxShadow: "none",
+  filter: "none",
+  backgroundImage: "none",
+} as const;
 
 const TASK_LABELS: Record<SuggestionTask, string> = {
   code: "Code",
@@ -217,9 +233,7 @@ export default function Composer({
         borderWidth={1}
         borderColor={isFocused ? "$color" : "$border"}
         style={{
-          boxShadow: isFocused
-            ? "0 0 0 2px var(--colorColorTransparent)"
-            : "0 1px 3px rgba(0,0,0,0.05)",
+          boxShadow: "none",
         }}
       >
         {attachments.length > 0 && (
@@ -272,10 +286,13 @@ export default function Composer({
           padding="$xs"
           borderRadius="$md"
           backgroundColor="$backgroundSecondary"
-          style={{ boxShadow: "0 6px 16px rgba(0,0,0,0.06)" }}
+          style={FLAT_BUTTON_STYLE}
         >
           <XStack alignItems="center" gap="$xs" position="relative" ref={menuRegionRef}>
-          <span title="add files and more" style={{ display: "inline-flex" }}>
+          <span
+            title="add files and more"
+            style={{ display: "flex", alignItems: "center", lineHeight: 0, verticalAlign: "top" }}
+          >
             <Button
               size="$3"
               backgroundColor={plusMenuOpen ? "$backgroundSecondary" : "transparent"}
@@ -285,8 +302,16 @@ export default function Composer({
               onPress={() => openOnly("plus")}
               aria-label="add files and more"
               disabled={isDisabled}
-              hoverStyle={{ backgroundColor: "$backgroundSecondary" }}
-              pressStyle={{ scale: 0.95 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+                backgroundColor: "$backgroundSecondary",
+              }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.95 }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
             >
               <Text fontSize={18} lineHeight={18} color="currentColor" fontWeight="700">
                 +
@@ -294,7 +319,10 @@ export default function Composer({
             </Button>
           </span>
 
-          <span title="AI suggest - Get model reccomendations for your task" style={{ display: "inline-flex" }}>
+          <span
+            title="AI suggest - Get model reccomendations for your task"
+            style={{ display: "flex", alignItems: "center", lineHeight: 0, verticalAlign: "top" }}
+          >
             <Button
               size="$3"
               backgroundColor={suggestionsOpen ? "$backgroundSecondary" : "transparent"}
@@ -304,8 +332,16 @@ export default function Composer({
               onPress={() => openOnly("suggestions")}
               aria-label="AI suggest - Get model reccomendations for your task"
               disabled={isDisabled}
-              hoverStyle={{ backgroundColor: "$backgroundSecondary" }}
-              pressStyle={{ scale: 0.95 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+                backgroundColor: "$backgroundSecondary",
+              }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.95 }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
             >
               <XStack alignItems="center" gap="$xs">
                 <Sparkles size={14} color="currentColor" />
@@ -316,7 +352,10 @@ export default function Composer({
             </Button>
           </span>
 
-          <span title="adjust temperature and max tokens" style={{ display: "inline-flex" }}>
+          <span
+            title="adjust temperature and max tokens"
+            style={{ display: "flex", alignItems: "center", lineHeight: 0, verticalAlign: "top" }}
+          >
             <Button
               size="$3"
               backgroundColor={settingsOpen ? "$backgroundSecondary" : "transparent"}
@@ -326,8 +365,16 @@ export default function Composer({
               onPress={() => openOnly("settings")}
               aria-label="adjust temperature and max tokens"
               disabled={isDisabled}
-              hoverStyle={{ backgroundColor: "$backgroundSecondary" }}
-              pressStyle={{ scale: 0.95 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+                backgroundColor: "$backgroundSecondary",
+              }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.95 }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
             >
               <Settings2 size={14} color="currentColor" />
             </Button>
@@ -581,7 +628,10 @@ export default function Composer({
         </XStack>
 
           <XStack alignItems="center" gap="$xs">
-          <span title="click to start voice input" style={{ display: "inline-flex" }}>
+          <span
+            title="click to start voice input"
+            style={{ display: "flex", alignItems: "center", lineHeight: 0, verticalAlign: "top" }}
+          >
             <Button
               size="$3"
               backgroundColor={isDictating ? "$backgroundSecondary" : "transparent"}
@@ -592,8 +642,16 @@ export default function Composer({
               aria-label="click to start voice input"
               disabled={isDisabled || !supportsDictation}
               opacity={isDisabled || !supportsDictation ? 0.5 : 1}
-              hoverStyle={{ backgroundColor: "$backgroundSecondary" }}
-              pressStyle={{ scale: 0.95 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+                backgroundColor: "$backgroundSecondary",
+              }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.95 }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
             >
               {isDictating ? <MicOff size={18} color="currentColor" /> : <Mic size={18} color="currentColor" />}
             </Button>
@@ -605,7 +663,15 @@ export default function Composer({
               color="white"
               borderRadius="$md"
               onPress={onStop}
-              pressStyle={{ scale: 0.98 }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.98 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+              }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
               icon={<X size={18} />}
             >
               Stop
@@ -619,7 +685,15 @@ export default function Composer({
               onPress={handleSendPress}
               disabled={isReadOnly || !value.trim()}
               opacity={!isReadOnly && value.trim() ? 1 : 0.5}
-              pressStyle={{ scale: 0.98 }}
+              pressStyle={{ ...FLAT_BUTTON_INTERACTION_STYLE, scale: 0.98 }}
+              hoverStyle={{
+                ...FLAT_BUTTON_INTERACTION_STYLE,
+              }}
+              shadowColor="transparent"
+              shadowOpacity={0}
+              shadowRadius={0}
+              elevation={0}
+              style={FLAT_BUTTON_STYLE}
               icon={<Send size={18} />}
             >
               Send
