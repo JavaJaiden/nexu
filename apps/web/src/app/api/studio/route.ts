@@ -1,13 +1,14 @@
 import { convertToCoreMessages, generateObject, streamText, tool } from "ai";
-import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { orOpenAI } from "@/lib/orProvider";
 
 const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   {
     subject: "Mathematics",
-    keywords: /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
+    keywords:
+      /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
   },
   {
     subject: "Physics",
@@ -15,7 +16,8 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   },
   {
     subject: "Computer Science",
-    keywords: /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
+    keywords:
+      /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
   },
   {
     subject: "Writing",
@@ -27,7 +29,10 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   },
 ];
 
-const modelMap: Record<string, { label: string; modelId: string; rationale: string }> = {
+const modelMap: Record<
+  string,
+  { label: string; modelId: string; rationale: string }
+> = {
   Mathematics: {
     label: "Nexus-Math",
     modelId: "gpt-4o-mini",
@@ -83,33 +88,46 @@ function formatLatency(ms: number) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
+  if (!process.env.OR_API_KEY) {
+    return new Response("Missing OR_API_KEY", { status: 500 });
   }
 
-  const { messages, mode, preferredModel, preferredModels, aggregatorModel, attachments, stepsMode } =
-    (await req.json()) as {
-      messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-      mode?: "fast" | "deep";
-      preferredModel?: string;
-      preferredModels?: string[];
-      aggregatorModel?: string;
-      attachments?: Array<{ name: string; type: string; data: string }>;
-      stepsMode?: "brief" | "detailed";
-    };
+  const {
+    messages,
+    mode,
+    preferredModel,
+    preferredModels,
+    aggregatorModel,
+    attachments,
+    stepsMode,
+  } = (await req.json()) as {
+    messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+    mode?: "fast" | "deep";
+    preferredModel?: string;
+    preferredModels?: string[];
+    aggregatorModel?: string;
+    attachments?: Array<{ name: string; type: string; data: string }>;
+    stepsMode?: "brief" | "detailed";
+  };
 
   const selectedMode = mode ?? "fast";
   const inputMessages = messages ?? [];
-  const preferredLabel = typeof preferredModel === "string" ? preferredModel : null;
+  const preferredLabel =
+    typeof preferredModel === "string" ? preferredModel : null;
   const preferredStack = Array.isArray(preferredModels)
     ? preferredModels.filter((entry) => typeof entry === "string")
     : [];
   const normalizedStack = Array.from(
     new Set(preferredStack.filter((entry) => entry && entry !== "auto"))
   );
-  const aggregatorLabel = typeof aggregatorModel === "string" ? aggregatorModel : null;
-  const preferredIsNexus = preferredLabel ? preferredLabel in modelLabelToId : false;
-  const preferredIsExternal = Boolean(preferredLabel && !preferredIsNexus && preferredLabel !== "auto");
+  const aggregatorLabel =
+    typeof aggregatorModel === "string" ? aggregatorModel : null;
+  const preferredIsNexus = preferredLabel
+    ? preferredLabel in modelLabelToId
+    : false;
+  const preferredIsExternal = Boolean(
+    preferredLabel && !preferredIsNexus && preferredLabel !== "auto"
+  );
   const usageCounts: Record<string, number> = {};
   const normalizedStepsMode = stepsMode === "detailed" ? "detailed" : "brief";
   const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
@@ -121,7 +139,7 @@ export async function POST(req: Request) {
   );
 
   const result = streamText({
-    model: openai("gpt-4o-mini"),
+    model: orOpenAI("gpt-4o-mini"),
     system: `You are the Nexus routing assistant. For each user question:
 1) Call detectSubject with the question.
 2) Call routeModel with the detected subject and the mode (${selectedMode}).
@@ -150,19 +168,28 @@ Keep answers structured and homework-safe.`,
         execute: async ({ subject, mode }) => {
           const fallbackEntry = modelMap[subject] ?? modelMap.General;
           const entry = preferredIsNexus
-            ? Object.values(modelMap).find((item) => item.label === preferredLabel) ?? fallbackEntry
+            ? (Object.values(modelMap).find(
+                (item) => item.label === preferredLabel
+              ) ?? fallbackEntry)
             : fallbackEntry;
-          const modeNote = mode === "deep" ? "Deep mode prioritizes reasoning." : "Fast mode prioritizes speed.";
+          const modeNote =
+            mode === "deep"
+              ? "Deep mode prioritizes reasoning."
+              : "Fast mode prioritizes speed.";
           const baseConfidence = subject === "General" ? 0.68 : 0.78;
           const confidence =
-            mode === "deep" ? Math.min(0.95, baseConfidence + 0.08) : baseConfidence;
+            mode === "deep"
+              ? Math.min(0.95, baseConfidence + 0.08)
+              : baseConfidence;
           const selectionNote = preferredIsExternal
             ? "User-selected external model via Model Hub."
             : preferredIsNexus
               ? "User-selected Nexus router."
               : "";
           const stackNote =
-            normalizedStack.length > 0 ? `User stacked ${normalizedStack.length} models.` : "";
+            normalizedStack.length > 0
+              ? `User stacked ${normalizedStack.length} models.`
+              : "";
           return {
             model:
               normalizedStack.length > 0
@@ -171,14 +198,16 @@ Keep answers structured and homework-safe.`,
                   ? preferredLabel
                   : entry.label,
             modelId: entry.modelId,
-            rationale: `${entry.rationale} ${modeNote} ${selectionNote} ${stackNote}`.trim(),
+            rationale:
+              `${entry.rationale} ${modeNote} ${selectionNote} ${stackNote}`.trim(),
             mode: mode ?? selectedMode,
             confidence,
           };
         },
       }),
       solveQuestion: tool({
-        description: "Solve the question with a structured, step-by-step answer.",
+        description:
+          "Solve the question with a structured, step-by-step answer.",
         parameters: z.object({
           question: z.string(),
           subject: z.string().optional(),
@@ -195,11 +224,13 @@ Keep answers structured and homework-safe.`,
             ? preferredLabel
             : preferredIsNexus
               ? preferredLabel
-              : model ?? selected.label;
+              : (model ?? selected.label);
           const stackedLabels =
             normalizedStack.length > 0
               ? normalizedStack
-              : [fallbackLabelOverride].filter((entry): entry is string => Boolean(entry));
+              : [fallbackLabelOverride].filter((entry): entry is string =>
+                  Boolean(entry)
+                );
           const solveOutputs = [];
 
           for (const label of stackedLabels) {
@@ -214,14 +245,19 @@ Keep answers structured and homework-safe.`,
             const currentCount = usageCounts[gateway.resolvedLabel] ?? 0;
             if (currentCount >= maxSame) {
               const overuseLabel = gateway.resolvedLabel;
-              const reroute = resolveRouterModel("Nexus-Core", usageCounts, maxSame);
+              const reroute = resolveRouterModel(
+                "Nexus-Core",
+                usageCounts,
+                maxSame
+              );
               gateway = {
                 ...reroute,
                 fallbackNote: `Rerouted from ${overuseLabel} to avoid overuse.`,
               };
               selectionReason = `Rerouted from ${overuseLabel} to avoid using the same model more than ${maxSame} times.`;
             }
-            usageCounts[gateway.resolvedLabel] = (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
+            usageCounts[gateway.resolvedLabel] =
+              (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
 
             const startedAt = Date.now();
             const result = await generateObject({
@@ -245,7 +281,10 @@ Keep answers structured and homework-safe.`,
               steps: result.object.steps,
               final: result.object.final,
               confidence: result.object.confidence,
-              citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
+              citations: [
+                `Model: ${gateway.resolvedLabel}`,
+                `Time: ${formatLatency(durationMs)}`,
+              ],
               durationMs,
               model: gateway.resolvedLabel,
               gatewayNote: gateway.fallbackNote,
@@ -254,14 +293,22 @@ Keep answers structured and homework-safe.`,
             });
           }
 
-          const shouldAggregate = stackedLabels.length > 1 || Boolean(aggregatorLabel);
+          const shouldAggregate =
+            stackedLabels.length > 1 || Boolean(aggregatorLabel);
           if (!shouldAggregate) return solveOutputs;
 
-          const aggregatorSource = aggregatorLabel && aggregatorLabel !== "auto" ? aggregatorLabel : "Nexus-Core";
+          const aggregatorSource =
+            aggregatorLabel && aggregatorLabel !== "auto"
+              ? aggregatorLabel
+              : "Nexus-Core";
           const aggregatorIsRouter = aggregatorSource.startsWith("Nexus-");
           const aggregatorGateway = aggregatorIsRouter
             ? resolveRouterModel(aggregatorSource, usageCounts, maxSame)
-            : resolveGatewayModel(aggregatorSource, fallbackLabel, fallbackModelId);
+            : resolveGatewayModel(
+                aggregatorSource,
+                fallbackLabel,
+                fallbackModelId
+              );
           const aggregatorStarted = Date.now();
           const aggregateResult = await generateObject({
             model: aggregatorGateway.model,
@@ -277,8 +324,13 @@ Keep answers structured and homework-safe.`,
             prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
               externalContext ? `\nContext:\n${externalContext}\n` : ""
             }\nModel answers:\n${solveOutputs
-              .map((solve, index) => `Answer ${index + 1} (${solve.model}): ${solve.final}`)
-              .join("\n")}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
+              .map(
+                (solve, index) =>
+                  `Answer ${index + 1} (${solve.model}): ${solve.final}`
+              )
+              .join(
+                "\n"
+              )}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
           });
           const aggregateDuration = Date.now() - aggregatorStarted;
           const aggregateSelectionReason =

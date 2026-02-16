@@ -7,7 +7,7 @@ import { missingEnvVariableUrl } from "./utils";
 export const openaiKeySet = query({
   args: {},
   handler: async () => {
-    return !!process.env.OPENAI_API_KEY;
+    return !!process.env.OR_API_KEY;
   },
 });
 
@@ -20,11 +20,11 @@ export const summary = internalAction({
   handler: async (ctx, { id, title, content }) => {
     const prompt = `Take in the following note and return a summary: Title: ${title}, Note content: ${content}`;
 
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.OR_API_KEY;
     if (!apiKey) {
       const error = missingEnvVariableUrl(
-        "OPENAI_API_KEY",
-        "https://platform.openai.com/account/api-keys"
+        "OR_API_KEY",
+        "https://openrouter.ai/keys"
       );
       console.error(error);
       await ctx.runMutation(internal.openai.saveSummary, {
@@ -33,7 +33,10 @@ export const summary = internalAction({
       });
       return;
     }
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({
+      apiKey,
+      baseURL: process.env.OR_BASE_URL ?? "https://openrouter.ai/api/v1",
+    });
     const output = await openai.chat.completions.create({
       messages: [
         {
@@ -43,7 +46,7 @@ export const summary = internalAction({
         },
         { role: "user", content: prompt },
       ],
-      model: "gpt-4-1106-preview",
+      model: "openai/gpt-4o-mini",
       response_format: { type: "json_object" },
     });
 
@@ -51,7 +54,7 @@ export const summary = internalAction({
     const messageContent = output.choices[0]?.message.content;
 
     if (!messageContent) {
-      throw new Error("No content received from OpenAI");
+      throw new Error("No content received from model provider");
     }
 
     const parsedOutput = JSON.parse(messageContent);

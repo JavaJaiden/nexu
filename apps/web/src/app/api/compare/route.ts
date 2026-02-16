@@ -6,7 +6,8 @@ import { buildExternalContext } from "@/lib/externalContext";
 const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   {
     subject: "Mathematics",
-    keywords: /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
+    keywords:
+      /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
   },
   {
     subject: "Physics",
@@ -14,7 +15,8 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   },
   {
     subject: "Computer Science",
-    keywords: /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
+    keywords:
+      /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
   },
   {
     subject: "Writing",
@@ -46,8 +48,8 @@ function formatLatency(ms: number) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
+  if (!process.env.OR_API_KEY) {
+    return new Response("Missing OR_API_KEY", { status: 500 });
   }
 
   const {
@@ -60,18 +62,20 @@ export async function POST(req: Request) {
     messages,
     temperature,
     maxTokens,
-  } =
-    (await req.json()) as {
-      question: string;
-      models: string[];
-      mode?: "fast" | "deep";
-      maxSameModel?: number;
-      attachments?: Array<{ name: string; type: string; data: string }>;
-      stepsMode?: "brief" | "detailed";
-      messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-      temperature?: number;
-      maxTokens?: number;
-    };
+  } = (await req.json()) as {
+    question: string;
+    models: string[];
+    mode?: "fast" | "deep";
+    maxSameModel?: number;
+    attachments?: Array<{ name: string; type: string; data: string }>;
+    stepsMode?: "brief" | "detailed";
+    messages?: Array<{
+      role: "user" | "assistant" | "system";
+      content: string;
+    }>;
+    temperature?: number;
+    maxTokens?: number;
+  };
 
   if (!question || !Array.isArray(models) || models.length === 0) {
     return new Response("Missing question or models", { status: 400 });
@@ -95,7 +99,8 @@ export async function POST(req: Request) {
   const normalizedStepsMode = stepsMode === "detailed" ? "detailed" : "brief";
   const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
   const maxSteps = normalizedStepsMode === "detailed" ? 8 : 5;
-  const maxSame = typeof maxSameModel === "number" && maxSameModel > 0 ? maxSameModel : 5;
+  const maxSame =
+    typeof maxSameModel === "number" && maxSameModel > 0 ? maxSameModel : 5;
   const normalizedTemperature =
     typeof temperature === "number" && Number.isFinite(temperature)
       ? Math.min(1, Math.max(0, temperature))
@@ -105,12 +110,18 @@ export async function POST(req: Request) {
       ? Math.max(128, Math.min(4096, Math.round(maxTokens)))
       : 1600;
   const usageCounts: Record<string, number> = {};
-  const externalContext = await buildExternalContext(question, attachments ?? []);
+  const externalContext = await buildExternalContext(
+    question,
+    attachments ?? []
+  );
   const normalizedMessages = Array.isArray(messages)
     ? messages
         .filter((message) => message && typeof message.content === "string")
         .map((message) => ({
-          role: message.role === "assistant" || message.role === "system" ? message.role : "user",
+          role:
+            message.role === "assistant" || message.role === "system"
+              ? message.role
+              : "user",
           content: message.content.trim(),
         }))
         .filter((message) => message.content.length > 0)
@@ -125,7 +136,11 @@ export async function POST(req: Request) {
       ? conversationMessages
           .map((message) => {
             const label =
-              message.role === "assistant" ? "Assistant" : message.role === "system" ? "System" : "User";
+              message.role === "assistant"
+                ? "Assistant"
+                : message.role === "system"
+                  ? "System"
+                  : "User";
             return `${label}: ${message.content}`;
           })
           .join("\n")
@@ -141,7 +156,8 @@ export async function POST(req: Request) {
       write({ type: "start", payload: { subject, mode: selectedMode } });
 
       const tasks = uniqueModels.map(async (requestedLabel) => {
-        const normalized = typeof requestedLabel === "string" ? requestedLabel : "Nexus-Core";
+        const normalized =
+          typeof requestedLabel === "string" ? requestedLabel : "Nexus-Core";
         const mapped = modelMap[normalized];
         const fallbackLabel = mapped?.label ?? "Nexus-Core";
         const fallbackModelId = mapped?.modelId ?? "gpt-4o-mini";
@@ -156,14 +172,19 @@ export async function POST(req: Request) {
         const currentCount = usageCounts[gateway.resolvedLabel] ?? 0;
         if (currentCount >= maxSame) {
           const overuseLabel = gateway.resolvedLabel;
-          const reroute = resolveRouterModel("Nexus-Core", usageCounts, maxSame);
+          const reroute = resolveRouterModel(
+            "Nexus-Core",
+            usageCounts,
+            maxSame
+          );
           gateway = {
             ...reroute,
             fallbackNote: `Rerouted from ${overuseLabel} to avoid overuse.`,
           };
           selectionReason = `Rerouted from ${overuseLabel} to avoid using the same model more than ${maxSame} times.`;
         }
-        usageCounts[gateway.resolvedLabel] = (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
+        usageCounts[gateway.resolvedLabel] =
+          (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
         const startedAt = Date.now();
         const generationConfig = {
           temperature: normalizedTemperature,
@@ -205,7 +226,10 @@ export async function POST(req: Request) {
             final: generated.final,
             confidence: generated.confidence,
             durationMs,
-            citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
+            citations: [
+              `Model: ${gateway.resolvedLabel}`,
+              `Time: ${formatLatency(durationMs)}`,
+            ],
             gatewayNote: gateway.fallbackNote,
             selectionReason,
           },

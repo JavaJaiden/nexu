@@ -56,9 +56,9 @@ Convex environment variables
 Make sure to enable **Google and Apple** as possible Social Connection
 providers, as these are used by the React Native login implementation.
 
-After that, optionally add the `OPENAI_API_KEY` env var from
-[OpenAI](https://platform.openai.com/account/api-keys) to your Convex
-environment variables to get AI summaries.
+After that, optionally add the `OR_API_KEY` env var from
+[OpenRouter](https://openrouter.ai/keys) to your app environment variables to
+enable model responses in the web studio.
 
 The `setup` command should now finish successfully.
 

@@ -10,12 +10,18 @@ function formatLatency(ms: number) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
+  if (!process.env.OR_API_KEY) {
+    return new Response("Missing OR_API_KEY", { status: 500 });
   }
 
-  const { question, answers, aggregatorModel, temperature, maxTokens, attachments } =
-    (await req.json()) as {
+  const {
+    question,
+    answers,
+    aggregatorModel,
+    temperature,
+    maxTokens,
+    attachments,
+  } = (await req.json()) as {
     question: string;
     answers: Array<{ model: string; final: string }>;
     aggregatorModel?: string;
@@ -28,7 +34,8 @@ export async function POST(req: Request) {
     return new Response("Missing question or answers", { status: 400 });
   }
 
-  const aggregatorLabel = typeof aggregatorModel === "string" ? aggregatorModel : null;
+  const aggregatorLabel =
+    typeof aggregatorModel === "string" ? aggregatorModel : null;
   const fallbackLabel = "Nexus-Core";
   const fallbackModelId = "gpt-4o-mini";
   const normalizedTemperature =
@@ -39,8 +46,13 @@ export async function POST(req: Request) {
     typeof maxTokens === "number" && Number.isFinite(maxTokens)
       ? Math.max(128, Math.min(4096, Math.round(maxTokens)))
       : 1600;
-  const externalContext = await buildExternalContext(question, attachments ?? []);
-  const isRouter = aggregatorLabel ? aggregatorLabel.startsWith("Nexus-") : true;
+  const externalContext = await buildExternalContext(
+    question,
+    attachments ?? []
+  );
+  const isRouter = aggregatorLabel
+    ? aggregatorLabel.startsWith("Nexus-")
+    : true;
   const gateway = aggregatorLabel
     ? isRouter
       ? resolveRouterModel(aggregatorLabel, {}, 3)
@@ -65,8 +77,13 @@ export async function POST(req: Request) {
     prompt: `Question: ${question}\n${
       externalContext ? `\nContext:\n${externalContext}\n` : ""
     }\nModel answers:\n${answers
-      .map((answer, index) => `Answer ${index + 1} (${answer.model}): ${answer.final}`)
-      .join("\n")}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+      .map(
+        (answer, index) =>
+          `Answer ${index + 1} (${answer.model}): ${answer.final}`
+      )
+      .join(
+        "\n"
+      )}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
   });
   const durationMs = Date.now() - startedAt;
   const generated = result.object as {
@@ -86,6 +103,9 @@ export async function POST(req: Request) {
     durationMs,
     gatewayNote: gateway.fallbackNote,
     selectionReason,
-    citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
+    citations: [
+      `Model: ${gateway.resolvedLabel}`,
+      `Time: ${formatLatency(durationMs)}`,
+    ],
   });
 }
