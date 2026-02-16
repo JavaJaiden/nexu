@@ -3,13 +3,22 @@
 import { UserProfile, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo } from "react";
-import { Button, Paragraph, Text, YStack } from "tamagui";
+import { useEffect, useMemo, useState } from "react";
+
+// Dynamically import Tamagui components to avoid SSR issues
+import type { Button as ButtonType, Paragraph as ParagraphType, Text as TextType, YStack as YStackType } from "tamagui";
 
 export default function PhoneRequiredClient() {
   const { isLoaded, userId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [tamaguiComponents, setTamaguiComponents] = useState<{
+    Button: typeof ButtonType;
+    Paragraph: typeof ParagraphType;
+    Text: typeof TextType;
+    YStack: typeof YStackType;
+  } | null>(null);
+
   const nextPath = useMemo(() => {
     const returnTo = searchParams.get("returnTo");
     return typeof returnTo === "string" && returnTo.startsWith("/")
@@ -24,9 +33,23 @@ export default function PhoneRequiredClient() {
     }
   }, [isLoaded, userId, router]);
 
-  if (!isLoaded || !userId) {
+  // Load Tamagui components on client side only
+  useEffect(() => {
+    import("tamagui").then((mod) => {
+      setTamaguiComponents({
+        Button: mod.Button,
+        Paragraph: mod.Paragraph,
+        Text: mod.Text,
+        YStack: mod.YStack,
+      });
+    });
+  }, []);
+
+  if (!isLoaded || !userId || !tamaguiComponents) {
     return null;
   }
+
+  const { Button, Paragraph, Text, YStack } = tamaguiComponents;
 
   return (
     <YStack
