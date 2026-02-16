@@ -1,7 +1,13 @@
+import { auth } from "@clerk/nextjs/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
+import {
+  createOpenRouterProvider,
+  resolveGatewayModel,
+  resolveRouterModel,
+} from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { consumeUserOpenRouterAccess } from "@/lib/server/settingsDatabase";
 
 function formatLatency(ms: number) {
   if (!Number.isFinite(ms)) return "unknown";
@@ -10,12 +16,32 @@ function formatLatency(ms: number) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
+  const { userId } = await auth();
+  if (!userId) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
-  const { question, answers, aggregatorModel, temperature, maxTokens, attachments } =
-    (await req.json()) as {
+  let userProvider: ReturnType<typeof createOpenRouterProvider>;
+  try {
+    const access = await consumeUserOpenRouterAccess(userId);
+    userProvider = createOpenRouterProvider(access.apiKey);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to prepare OpenRouter access.";
+    const status = message.toLowerCase().includes("limit") ? 429 : 500;
+    return new Response(message, { status });
+  }
+
+  const {
+    question,
+    answers,
+    aggregatorModel,
+    temperature,
+    maxTokens,
+    attachments,
+  } = (await req.json()) as {
     question: string;
     answers: Array<{ model: string; final: string }>;
     aggregatorModel?: string;
@@ -28,7 +54,8 @@ export async function POST(req: Request) {
     return new Response("Missing question or answers", { status: 400 });
   }
 
-  const aggregatorLabel = typeof aggregatorModel === "string" ? aggregatorModel : null;
+  const aggregatorLabel =
+    typeof aggregatorModel === "string" ? aggregatorModel : null;
   const fallbackLabel = "Nexus-Core";
   const fallbackModelId = "gpt-4o-mini";
   const normalizedTemperature =
@@ -39,35 +66,85 @@ export async function POST(req: Request) {
     typeof maxTokens === "number" && Number.isFinite(maxTokens)
       ? Math.max(128, Math.min(4096, Math.round(maxTokens)))
       : 1600;
-  const externalContext = await buildExternalContext(question, attachments ?? []);
-  const isRouter = aggregatorLabel ? aggregatorLabel.startsWith("Nexus-") : true;
+  const externalContext = await buildExternalContext(
+    question,
+    attachments ?? []
+  );
+  const isRouter = aggregatorLabel
+    ? aggregatorLabel.startsWith("Nexus-")
+    : true;
   const gateway = aggregatorLabel
     ? isRouter
-      ? resolveRouterModel(aggregatorLabel, {}, 3)
-      : resolveGatewayModel(aggregatorLabel, fallbackLabel, fallbackModelId)
-    : resolveRouterModel("Nexus-Core", {}, 3);
+      ? resolveRouterModel(aggregatorLabel, {}, 3, userProvider)
+      : resolveGatewayModel(
+          aggregatorLabel,
+          fallbackLabel,
+          fallbackModelId,
+          userProvider
+        )
+    : resolveRouterModel("Nexus-Core", {}, 3, userProvider);
 
   const startedAt = Date.now();
   const generationConfig = {
     temperature: normalizedTemperature,
     maxTokens: normalizedMaxTokens,
   } as any;
-  const result = await generateObject({
-    model: gateway.model,
-    schema: z.object({
-      steps: z.array(z.string()).min(2).max(6),
-      final: z.string(),
-      confidence: z.number().min(0).max(1),
-    }),
-    ...generationConfig,
-    system:
-      "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
-    prompt: `Question: ${question}\n${
-      externalContext ? `\nContext:\n${externalContext}\n` : ""
-    }\nModel answers:\n${answers
-      .map((answer, index) => `Answer ${index + 1} (${answer.model}): ${answer.final}`)
-      .join("\n")}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
-  });
+  const result = await (async () => {
+    try {
+      return await generateObject({
+        model: gateway.model,
+        schema: z.object({
+          steps: z.array(z.string()).min(2).max(6),
+          final: z.string(),
+          confidence: z.number().min(0).max(1),
+        }),
+        ...generationConfig,
+        system:
+          "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
+        prompt: `Question: ${question}\n${
+          externalContext ? `\nContext:\n${externalContext}\n` : ""
+        }\nModel answers:\n${answers
+          .map(
+            (answer, index) =>
+              `Answer ${index + 1} (${answer.model}): ${answer.final}`
+          )
+          .join(
+            "\n"
+          )}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+      });
+    } catch {
+      const fallbackGateway = resolveRouterModel(
+        "Nexus-Core",
+        {},
+        3,
+        userProvider
+      );
+      gateway.model = fallbackGateway.model;
+      gateway.resolvedLabel = fallbackGateway.resolvedLabel;
+      gateway.fallbackNote = `Primary aggregator model failed to return structured output. Routed to ${fallbackGateway.resolvedLabel}.`;
+      return await generateObject({
+        model: gateway.model,
+        schema: z.object({
+          steps: z.array(z.string()).min(2).max(6),
+          final: z.string(),
+          confidence: z.number().min(0).max(1),
+        }),
+        ...generationConfig,
+        system:
+          "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
+        prompt: `Question: ${question}\n${
+          externalContext ? `\nContext:\n${externalContext}\n` : ""
+        }\nModel answers:\n${answers
+          .map(
+            (answer, index) =>
+              `Answer ${index + 1} (${answer.model}): ${answer.final}`
+          )
+          .join(
+            "\n"
+          )}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+      });
+    }
+  })();
   const durationMs = Date.now() - startedAt;
   const generated = result.object as {
     steps: string[];
@@ -86,6 +163,9 @@ export async function POST(req: Request) {
     durationMs,
     gatewayNote: gateway.fallbackNote,
     selectionReason,
-    citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
+    citations: [
+      `Model: ${gateway.resolvedLabel}`,
+      `Time: ${formatLatency(durationMs)}`,
+    ],
   });
 }

@@ -1,8 +1,14 @@
 import "server-only";
 
-import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
-import { promises as fs } from "fs";
-import path from "path";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { User } from "@clerk/nextjs/server";
 import type {
   ApiKeyRecord,
@@ -14,6 +20,7 @@ import type {
   OrganizationRecord,
   TransactionRecord,
   UserConnectionRecord,
+  UserOpenRouterKeyRecord,
   UserRecord,
   UserSessionRecord,
 } from "@/lib/settingsTypes";
@@ -29,6 +36,7 @@ type SettingsDb = {
   invitations: OrganizationInvitationRecord[];
   sessions: UserSessionRecord[];
   connections: UserConnectionRecord[];
+  openRouterKeys: UserOpenRouterKeyRecord[];
 };
 
 type StripeChargeResult = {
@@ -39,6 +47,31 @@ type StripeChargeResult = {
 const DB_DIR = path.join(process.cwd(), "apps/web/cache");
 const DB_FILE = path.join(DB_DIR, "settings-db.json");
 const UPLOAD_DIR = path.join(DB_DIR, "settings-uploads");
+const OPENROUTER_KEYS_URL = "https://openrouter.ai/api/v1/keys";
+
+const DEFAULT_OPENROUTER_DAILY_REQUEST_LIMIT = 200;
+const DEFAULT_OPENROUTER_CREDIT_LIMIT = 10;
+
+function normalizeDailyRequestLimit(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    return DEFAULT_OPENROUTER_DAILY_REQUEST_LIMIT;
+  return parsed;
+}
+
+function normalizeCreditLimit(value: string | undefined) {
+  const parsed = Number.parseFloat(value ?? "");
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    return DEFAULT_OPENROUTER_CREDIT_LIMIT;
+  return parsed;
+}
+
+const OPENROUTER_DAILY_REQUEST_LIMIT = normalizeDailyRequestLimit(
+  process.env.OPENROUTER_USER_DAILY_REQUEST_LIMIT
+);
+const OPENROUTER_CREDIT_LIMIT = normalizeCreditLimit(
+  process.env.OPENROUTER_USER_CREDIT_LIMIT
+);
 
 const EMPTY_DB: SettingsDb = {
   users: [],
@@ -51,6 +84,7 @@ const EMPTY_DB: SettingsDb = {
   invitations: [],
   sessions: [],
   connections: [],
+  openRouterKeys: [],
 };
 
 let writeQueue = Promise.resolve();
@@ -73,7 +107,13 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function getDefaultNotificationSettings(userId: string): NotificationSettingsRecord {
+function currentDateKey() {
+  return nowIso().slice(0, 10);
+}
+
+function getDefaultNotificationSettings(
+  userId: string
+): NotificationSettingsRecord {
   const now = nowIso();
   return {
     userId,
@@ -116,7 +156,9 @@ function normalizeNotificationSettings(
           ? input.transactionalEmails
           : defaults.inbox,
     weeklySummary:
-      typeof input?.weeklySummary === "boolean" ? input.weeklySummary : defaults.weeklySummary,
+      typeof input?.weeklySummary === "boolean"
+        ? input.weeklySummary
+        : defaults.weeklySummary,
     securityEmails:
       typeof input?.securityEmails === "boolean"
         ? input.securityEmails
@@ -140,11 +182,17 @@ function normalizeNotificationSettings(
           ? input.marketingNewsletter
           : defaults.newsletter,
     productUpdates:
-      typeof input?.productUpdates === "boolean" ? input.productUpdates : defaults.productUpdates,
+      typeof input?.productUpdates === "boolean"
+        ? input.productUpdates
+        : defaults.productUpdates,
     createdAt:
-      typeof input?.createdAt === "string" && input.createdAt ? input.createdAt : defaults.createdAt,
+      typeof input?.createdAt === "string" && input.createdAt
+        ? input.createdAt
+        : defaults.createdAt,
     updatedAt:
-      typeof input?.updatedAt === "string" && input.updatedAt ? input.updatedAt : defaults.updatedAt,
+      typeof input?.updatedAt === "string" && input.updatedAt
+        ? input.updatedAt
+        : defaults.updatedAt,
   };
 }
 
@@ -190,6 +238,137 @@ function getApiKeyPrefix(secret: string) {
   return secret.slice(0, 12);
 }
 
+type OpenRouterCreateKeyResponse = {
+  key?: string;
+  data?: {
+    hash?: string;
+    name?: string;
+    limit?: number | null;
+    limit_remaining?: number | null;
+    limit_reset?: "daily" | "weekly" | "monthly" | null;
+    disabled?: boolean;
+    created_at?: string;
+    updated_at?: string;
+    expires_at?: string;
+  };
+  error?: {
+    message?: string;
+  };
+};
+
+function getOpenRouterManagementKey() {
+  return process.env.OR_MANAGEMENT_KEY ?? process.env.OR_API_KEY ?? "";
+}
+
+async function createOpenRouterUserKey(
+  userId: string
+): Promise<UserOpenRouterKeyRecord> {
+  const managementKey = getOpenRouterManagementKey();
+  if (!managementKey) {
+    throw new Error(
+      "Missing OR_MANAGEMENT_KEY or OR_API_KEY for OpenRouter key provisioning."
+    );
+  }
+
+  const name = `nexu-user-${userId}`;
+  const response = await fetch(OPENROUTER_KEYS_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${managementKey}`,
+      "Content-Type": "application/json",
+      "X-Title": "Nexu",
+    },
+    body: JSON.stringify({
+      name,
+      label: name,
+      limit: OPENROUTER_CREDIT_LIMIT,
+    }),
+  });
+
+  const payload = (await response
+    .json()
+    .catch(() => null)) as OpenRouterCreateKeyResponse | null;
+  if (!response.ok) {
+    const message =
+      payload?.error?.message ||
+      `OpenRouter key creation failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  const key = payload?.key?.trim();
+  if (!key) {
+    throw new Error("OpenRouter did not return a usable API key.");
+  }
+
+  const createdAt = payload?.data?.created_at ?? nowIso();
+  const updatedAt = payload?.data?.updated_at ?? createdAt;
+
+  return {
+    id: payload?.data?.hash || randomUUID(),
+    userId,
+    key,
+    name: payload?.data?.name || name,
+    hash: payload?.data?.hash,
+    disabled: Boolean(payload?.data?.disabled),
+    limit:
+      typeof payload?.data?.limit === "number"
+        ? payload.data.limit
+        : OPENROUTER_CREDIT_LIMIT,
+    limitRemaining:
+      typeof payload?.data?.limit_remaining === "number"
+        ? payload.data.limit_remaining
+        : null,
+    limitReset: payload?.data?.limit_reset ?? null,
+    createdAt,
+    updatedAt,
+    expiresAt: payload?.data?.expires_at || undefined,
+    requestCountDate: currentDateKey(),
+    requestCount: 0,
+  };
+}
+
+export async function consumeUserOpenRouterAccess(userId: string) {
+  return withWrite(async (db) => {
+    let keyRecord =
+      db.openRouterKeys.find(
+        (entry) => entry.userId === userId && !entry.disabled && entry.key
+      ) ?? null;
+
+    if (!keyRecord) {
+      keyRecord = await createOpenRouterUserKey(userId);
+      db.openRouterKeys = db.openRouterKeys.filter(
+        (entry) => entry.userId !== userId
+      );
+      db.openRouterKeys.push(keyRecord);
+    }
+
+    const dateKey = currentDateKey();
+    if (keyRecord.requestCountDate !== dateKey) {
+      keyRecord.requestCountDate = dateKey;
+      keyRecord.requestCount = 0;
+    }
+
+    if (keyRecord.requestCount >= OPENROUTER_DAILY_REQUEST_LIMIT) {
+      throw new Error(
+        `Daily model request limit reached (${OPENROUTER_DAILY_REQUEST_LIMIT}/day).`
+      );
+    }
+
+    keyRecord.requestCount += 1;
+    keyRecord.updatedAt = nowIso();
+
+    return {
+      apiKey: keyRecord.key,
+      limitPerDay: OPENROUTER_DAILY_REQUEST_LIMIT,
+      requestsUsedToday: keyRecord.requestCount,
+      requestsRemainingToday: Math.max(
+        0,
+        OPENROUTER_DAILY_REQUEST_LIMIT - keyRecord.requestCount
+      ),
+    };
+  });
+}
+
 async function ensureDbFile() {
   await fs.mkdir(DB_DIR, { recursive: true });
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
@@ -207,17 +386,28 @@ async function readDb(): Promise<SettingsDb> {
     const parsed = JSON.parse(raw) as Partial<SettingsDb>;
     return {
       users: Array.isArray(parsed.users) ? parsed.users : [],
-      organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
-      organizationMembers: Array.isArray(parsed.organizationMembers) ? parsed.organizationMembers : [],
+      organizations: Array.isArray(parsed.organizations)
+        ? parsed.organizations
+        : [],
+      organizationMembers: Array.isArray(parsed.organizationMembers)
+        ? parsed.organizationMembers
+        : [],
       notificationSettings: Array.isArray(parsed.notificationSettings)
         ? parsed.notificationSettings
         : [],
       apiKeys: Array.isArray(parsed.apiKeys) ? parsed.apiKeys : [],
-      creditAccounts: Array.isArray(parsed.creditAccounts) ? parsed.creditAccounts : [],
-      transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+      creditAccounts: Array.isArray(parsed.creditAccounts)
+        ? parsed.creditAccounts
+        : [],
+      transactions: Array.isArray(parsed.transactions)
+        ? parsed.transactions
+        : [],
       invitations: Array.isArray(parsed.invitations) ? parsed.invitations : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       connections: Array.isArray(parsed.connections) ? parsed.connections : [],
+      openRouterKeys: Array.isArray(parsed.openRouterKeys)
+        ? parsed.openRouterKeys
+        : [],
     };
   } catch {
     return { ...EMPTY_DB };
@@ -230,7 +420,9 @@ async function writeDb(db: SettingsDb) {
   await fs.rename(tmpPath, DB_FILE);
 }
 
-async function withWrite<T>(fn: (db: SettingsDb) => Promise<T> | T): Promise<T> {
+async function withWrite<T>(
+  fn: (db: SettingsDb) => Promise<T> | T
+): Promise<T> {
   const task = writeQueue.then(async () => {
     const db = await readDb();
     const result = await fn(db);
@@ -245,7 +437,9 @@ async function withWrite<T>(fn: (db: SettingsDb) => Promise<T> | T): Promise<T> 
 }
 
 function ensureSession(db: SettingsDb, userId: string) {
-  const existing = db.sessions.find((session) => session.userId === userId && !session.revokedAt);
+  const existing = db.sessions.find(
+    (session) => session.userId === userId && !session.revokedAt
+  );
   if (existing) {
     existing.lastActiveAt = nowIso();
     return existing;
@@ -263,7 +457,8 @@ function ensureSession(db: SettingsDb, userId: string) {
 
 function ensureConnection(db: SettingsDb, userId: string, provider: "google") {
   const exists = db.connections.some(
-    (connection) => connection.userId === userId && connection.provider === provider
+    (connection) =>
+      connection.userId === userId && connection.provider === provider
   );
   if (exists) return;
   db.connections.push({
@@ -274,15 +469,22 @@ function ensureConnection(db: SettingsDb, userId: string, provider: "google") {
   });
 }
 
-export async function ensureUserFromClerk(userId: string, clerkUser?: User | null) {
+export async function ensureUserFromClerk(
+  userId: string,
+  clerkUser?: User | null
+) {
   return withWrite(async (db) => {
     let user = db.users.find((entry) => entry.id === userId);
     const email =
       clerkUser?.primaryEmailAddress?.emailAddress ??
       clerkUser?.emailAddresses[0]?.emailAddress ??
       `${userId}@example.local`;
-    const fullName = [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(" ").trim();
-    const name = fullName || clerkUser?.username || email.split("@")[0] || "User";
+    const fullName = [clerkUser?.firstName, clerkUser?.lastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const name =
+      fullName || clerkUser?.username || email.split("@")[0] || "User";
 
     if (!user) {
       user = {
@@ -299,12 +501,17 @@ export async function ensureUserFromClerk(userId: string, clerkUser?: User | nul
     } else {
       user.email = email;
       if (!user.name) user.name = name;
-      if (!user.avatarUrl && clerkUser?.imageUrl) user.avatarUrl = clerkUser.imageUrl;
+      if (!user.avatarUrl && clerkUser?.imageUrl)
+        user.avatarUrl = clerkUser.imageUrl;
       user.updatedAt = nowIso();
     }
 
     ensureSession(db, userId);
-    if (clerkUser?.externalAccounts.some((account) => account.provider === "oauth_google")) {
+    if (
+      clerkUser?.externalAccounts.some(
+        (account) => account.provider === "oauth_google"
+      )
+    ) {
       ensureConnection(db, userId, "google");
     }
     return user;
@@ -316,11 +523,16 @@ function getUserMemberships(db: SettingsDb, userId: string) {
     .filter((member) => member.userId === userId)
     .map((member) => ({
       ...member,
-      organization: db.organizations.find((org) => org.id === member.organizationId),
+      organization: db.organizations.find(
+        (org) => org.id === member.organizationId
+      ),
     }))
     .filter(
-      (entry): entry is OrganizationMemberRecord & { organization: OrganizationRecord } =>
-        Boolean(entry.organization)
+      (
+        entry
+      ): entry is OrganizationMemberRecord & {
+        organization: OrganizationRecord;
+      } => Boolean(entry.organization)
     );
   return memberships;
 }
@@ -353,9 +565,12 @@ export async function updateUserProfile(
   return withWrite(async (db) => {
     const user = db.users.find((entry) => entry.id === userId);
     if (!user) return null;
-    if (typeof input.name === "string") user.name = input.name.trim() || user.name;
-    if (typeof input.phone === "string") user.phone = input.phone.trim() || undefined;
-    if (typeof input.avatarUrl === "string") user.avatarUrl = input.avatarUrl.trim() || undefined;
+    if (typeof input.name === "string")
+      user.name = input.name.trim() || user.name;
+    if (typeof input.phone === "string")
+      user.phone = input.phone.trim() || undefined;
+    if (typeof input.avatarUrl === "string")
+      user.avatarUrl = input.avatarUrl.trim() || undefined;
     user.updatedAt = nowIso();
     return user;
   });
@@ -366,11 +581,14 @@ export async function deleteUserAccount(userId: string) {
     const user = db.users.find((entry) => entry.id === userId);
     if (!user) return false;
 
-    const ownedOrganizations = db.organizations.filter((org) => org.ownerId === userId);
+    const ownedOrganizations = db.organizations.filter(
+      (org) => org.ownerId === userId
+    );
 
     for (const organization of ownedOrganizations) {
       const members = db.organizationMembers.filter(
-        (member) => member.organizationId === organization.id && member.userId !== userId
+        (member) =>
+          member.organizationId === organization.id && member.userId !== userId
       );
       const promotedMember =
         members.find((member) => member.role === "admin") ?? members[0] ?? null;
@@ -380,7 +598,9 @@ export async function deleteUserAccount(userId: string) {
         promotedMember.role = "owner";
         organization.updatedAt = nowIso();
       } else {
-        db.organizations = db.organizations.filter((entry) => entry.id !== organization.id);
+        db.organizations = db.organizations.filter(
+          (entry) => entry.id !== organization.id
+        );
         db.organizationMembers = db.organizationMembers.filter(
           (entry) => entry.organizationId !== organization.id
         );
@@ -390,17 +610,26 @@ export async function deleteUserAccount(userId: string) {
         db.transactions = db.transactions.filter(
           (entry) => entry.organizationId !== organization.id
         );
-        db.apiKeys = db.apiKeys.filter((entry) => entry.organizationId !== organization.id);
+        db.apiKeys = db.apiKeys.filter(
+          (entry) => entry.organizationId !== organization.id
+        );
         db.invitations = db.invitations.filter(
           (entry) => entry.organizationId !== organization.id
         );
       }
     }
 
-    db.organizationMembers = db.organizationMembers.filter((entry) => entry.userId !== userId);
-    db.notificationSettings = db.notificationSettings.filter((entry) => entry.userId !== userId);
+    db.organizationMembers = db.organizationMembers.filter(
+      (entry) => entry.userId !== userId
+    );
+    db.notificationSettings = db.notificationSettings.filter(
+      (entry) => entry.userId !== userId
+    );
     db.sessions = db.sessions.filter((entry) => entry.userId !== userId);
     db.connections = db.connections.filter((entry) => entry.userId !== userId);
+    db.openRouterKeys = db.openRouterKeys.filter(
+      (entry) => entry.userId !== userId
+    );
     db.invitations = db.invitations.filter(
       (entry) =>
         entry.invitedByUserId !== userId &&
@@ -411,7 +640,11 @@ export async function deleteUserAccount(userId: string) {
   });
 }
 
-export async function changeUserEmail(userId: string, nextEmail: string, password: string) {
+export async function changeUserEmail(
+  userId: string,
+  nextEmail: string,
+  password: string
+) {
   return withWrite(async (db) => {
     const user = db.users.find((entry) => entry.id === userId);
     if (!user) return null;
@@ -423,7 +656,9 @@ export async function changeUserEmail(userId: string, nextEmail: string, passwor
       throw new Error("Password confirmation is required.");
     }
     const normalized = nextEmail.trim().toLowerCase();
-    const duplicate = db.users.find((entry) => entry.email.toLowerCase() === normalized && entry.id !== userId);
+    const duplicate = db.users.find(
+      (entry) => entry.email.toLowerCase() === normalized && entry.id !== userId
+    );
     if (duplicate) throw new Error("That email is already in use.");
     user.email = normalized;
     user.updatedAt = nowIso();
@@ -482,7 +717,9 @@ export async function setMfaEnabled(userId: string, enabled: boolean) {
 
 export async function revokeSession(userId: string, sessionId: string) {
   return withWrite(async (db) => {
-    const session = db.sessions.find((entry) => entry.id === sessionId && entry.userId === userId);
+    const session = db.sessions.find(
+      (entry) => entry.id === sessionId && entry.userId === userId
+    );
     if (!session) return false;
     session.revokedAt = nowIso();
     return true;
@@ -491,7 +728,9 @@ export async function revokeSession(userId: string, sessionId: string) {
 
 export async function getNotificationSettings(userId: string) {
   const db = await readDb();
-  const existing = db.notificationSettings.find((entry) => entry.userId === userId);
+  const existing = db.notificationSettings.find(
+    (entry) => entry.userId === userId
+  );
   return normalizeNotificationSettings(userId, existing);
 }
 
@@ -504,7 +743,9 @@ export async function updateNotificationSettings(
   }
 ) {
   return withWrite(async (db) => {
-    let settings = db.notificationSettings.find((entry) => entry.userId === userId);
+    let settings = db.notificationSettings.find(
+      (entry) => entry.userId === userId
+    );
     if (!settings) {
       settings = getDefaultNotificationSettings(userId);
       db.notificationSettings.push(settings);
@@ -526,12 +767,20 @@ export async function updateNotificationSettings(
 
     settings.contacts = Boolean(updates.contacts ?? settings.contacts);
     settings.inbox = Boolean(updates.inbox ?? settings.inbox);
-    settings.weeklySummary = Boolean(updates.weeklySummary ?? settings.weeklySummary);
-    settings.securityEmails = Boolean(updates.securityEmails ?? settings.securityEmails);
+    settings.weeklySummary = Boolean(
+      updates.weeklySummary ?? settings.weeklySummary
+    );
+    settings.securityEmails = Boolean(
+      updates.securityEmails ?? settings.securityEmails
+    );
     settings.usageAt90 = Boolean(updates.usageAt90 ?? settings.usageAt90);
-    settings.usageExceeded = Boolean(updates.usageExceeded ?? settings.usageExceeded);
+    settings.usageExceeded = Boolean(
+      updates.usageExceeded ?? settings.usageExceeded
+    );
     settings.newsletter = Boolean(updates.newsletter ?? settings.newsletter);
-    settings.productUpdates = Boolean(updates.productUpdates ?? settings.productUpdates);
+    settings.productUpdates = Boolean(
+      updates.productUpdates ?? settings.productUpdates
+    );
     settings.updatedAt = nowIso();
     return settings;
   });
@@ -583,7 +832,10 @@ export async function listOrganizationsForUser(userId: string) {
     .sort((a, b) => a.organization.name.localeCompare(b.organization.name));
 }
 
-export async function getOrganizationContext(userId: string, organizationId?: string) {
+export async function getOrganizationContext(
+  userId: string,
+  organizationId?: string
+) {
   const db = await readDb();
   const memberships = getUserMemberships(db, userId);
   if (memberships.length === 0) return null;
@@ -615,9 +867,14 @@ function assertCanManageBilling(role: MemberRole) {
   }
 }
 
-async function getMembership(db: SettingsDb, userId: string, organizationId: string) {
+async function getMembership(
+  db: SettingsDb,
+  userId: string,
+  organizationId: string
+) {
   return db.organizationMembers.find(
-    (member) => member.organizationId === organizationId && member.userId === userId
+    (member) =>
+      member.organizationId === organizationId && member.userId === userId
   );
 }
 
@@ -632,20 +889,35 @@ export async function updateOrganizationGeneral(
     const org = db.organizations.find((entry) => entry.id === organizationId);
     if (!org) return null;
 
-    const nextSlug = typeof updates.slug === "string" ? asSlug(updates.slug) : org.slug;
+    const nextSlug =
+      typeof updates.slug === "string" ? asSlug(updates.slug) : org.slug;
     if (!nextSlug) throw new Error("Slug is invalid.");
     const duplicate = db.organizations.find(
       (entry) => entry.slug === nextSlug && entry.id !== organizationId
     );
     if (duplicate) throw new Error("Slug already exists.");
 
-    org.name = typeof updates.name === "string" ? updates.name.trim() || org.name : org.name;
+    org.name =
+      typeof updates.name === "string"
+        ? updates.name.trim() || org.name
+        : org.name;
     org.slug = nextSlug;
-    org.logoUrl = typeof updates.logoUrl === "string" ? updates.logoUrl.trim() || undefined : org.logoUrl;
-    org.address = typeof updates.address === "string" ? updates.address.trim() || undefined : org.address;
-    org.website = typeof updates.website === "string" ? updates.website.trim() || undefined : org.website;
+    org.logoUrl =
+      typeof updates.logoUrl === "string"
+        ? updates.logoUrl.trim() || undefined
+        : org.logoUrl;
+    org.address =
+      typeof updates.address === "string"
+        ? updates.address.trim() || undefined
+        : org.address;
+    org.website =
+      typeof updates.website === "string"
+        ? updates.website.trim() || undefined
+        : org.website;
     org.billingEmail =
-      typeof updates.billingEmail === "string" ? updates.billingEmail.trim() || undefined : org.billingEmail;
+      typeof updates.billingEmail === "string"
+        ? updates.billingEmail.trim() || undefined
+        : org.billingEmail;
     org.billingAddress =
       typeof updates.billingAddress === "string"
         ? updates.billingAddress.trim() || undefined
@@ -665,23 +937,39 @@ export async function updateOrganizationGeneral(
   });
 }
 
-export async function deleteOrganization(userId: string, organizationId: string) {
+export async function deleteOrganization(
+  userId: string,
+  organizationId: string
+) {
   return withWrite(async (db) => {
     const member = await getMembership(db, userId, organizationId);
     if (!member || member.role !== "owner") throw new Error("Forbidden");
-    db.organizations = db.organizations.filter((org) => org.id !== organizationId);
+    db.organizations = db.organizations.filter(
+      (org) => org.id !== organizationId
+    );
     db.organizationMembers = db.organizationMembers.filter(
       (entry) => entry.organizationId !== organizationId
     );
-    db.creditAccounts = db.creditAccounts.filter((entry) => entry.organizationId !== organizationId);
-    db.transactions = db.transactions.filter((entry) => entry.organizationId !== organizationId);
-    db.apiKeys = db.apiKeys.filter((entry) => entry.organizationId !== organizationId);
-    db.invitations = db.invitations.filter((entry) => entry.organizationId !== organizationId);
+    db.creditAccounts = db.creditAccounts.filter(
+      (entry) => entry.organizationId !== organizationId
+    );
+    db.transactions = db.transactions.filter(
+      (entry) => entry.organizationId !== organizationId
+    );
+    db.apiKeys = db.apiKeys.filter(
+      (entry) => entry.organizationId !== organizationId
+    );
+    db.invitations = db.invitations.filter(
+      (entry) => entry.organizationId !== organizationId
+    );
     return true;
   });
 }
 
-export async function listOrganizationMembers(userId: string, organizationId: string) {
+export async function listOrganizationMembers(
+  userId: string,
+  organizationId: string
+) {
   const db = await readDb();
   const member = await getMembership(db, userId, organizationId);
   if (!member) throw new Error("Forbidden");
@@ -693,13 +981,21 @@ export async function listOrganizationMembers(userId: string, organizationId: st
       user: db.users.find((user) => user.id === entry.userId) ?? null,
     }))
     .sort((a, b) => {
-      const roleOrder: Record<MemberRole, number> = { owner: 0, admin: 1, member: 2 };
-      if (roleOrder[a.role] !== roleOrder[b.role]) return roleOrder[a.role] - roleOrder[b.role];
+      const roleOrder: Record<MemberRole, number> = {
+        owner: 0,
+        admin: 1,
+        member: 2,
+      };
+      if (roleOrder[a.role] !== roleOrder[b.role])
+        return roleOrder[a.role] - roleOrder[b.role];
       return (a.user?.name ?? "").localeCompare(b.user?.name ?? "");
     });
 
   const invitations = db.invitations
-    .filter((entry) => entry.organizationId === organizationId && entry.status === "pending")
+    .filter(
+      (entry) =>
+        entry.organizationId === organizationId && entry.status === "pending"
+    )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   return { members, invitations, role: member.role };
@@ -718,10 +1014,14 @@ export async function inviteOrganizationMember(
     const email = input.email.trim().toLowerCase();
     if (!email) throw new Error("Email is required.");
 
-    const existingUser = db.users.find((user) => user.email.toLowerCase() === email);
+    const existingUser = db.users.find(
+      (user) => user.email.toLowerCase() === email
+    );
     if (existingUser) {
       const existingMember = db.organizationMembers.find(
-        (entry) => entry.organizationId === organizationId && entry.userId === existingUser.id
+        (entry) =>
+          entry.organizationId === organizationId &&
+          entry.userId === existingUser.id
       );
       if (existingMember) {
         throw new Error("User is already a member.");
@@ -742,7 +1042,8 @@ export async function inviteOrganizationMember(
         entry.email.toLowerCase() === email &&
         entry.status === "pending"
     );
-    if (duplicateInvite) throw new Error("An invitation is already pending for that email.");
+    if (duplicateInvite)
+      throw new Error("An invitation is already pending for that email.");
 
     db.invitations.push({
       id: randomUUID(),
@@ -770,7 +1071,8 @@ export async function updateOrganizationMemberRole(
     assertCanManageMembers(actor.role);
 
     const target = db.organizationMembers.find(
-      (entry) => entry.organizationId === organizationId && entry.userId === memberUserId
+      (entry) =>
+        entry.organizationId === organizationId && entry.userId === memberUserId
     );
     if (!target) return null;
     if (target.role === "owner") {
@@ -792,24 +1094,35 @@ export async function removeOrganizationMember(
     assertCanManageMembers(actor.role);
 
     const target = db.organizationMembers.find(
-      (entry) => entry.organizationId === organizationId && entry.userId === memberUserId
+      (entry) =>
+        entry.organizationId === organizationId && entry.userId === memberUserId
     );
     if (!target) return false;
-    if (target.role === "owner") throw new Error("Cannot remove organization owner.");
+    if (target.role === "owner")
+      throw new Error("Cannot remove organization owner.");
     db.organizationMembers = db.organizationMembers.filter(
-      (entry) => !(entry.organizationId === organizationId && entry.userId === memberUserId)
+      (entry) =>
+        !(
+          entry.organizationId === organizationId &&
+          entry.userId === memberUserId
+        )
     );
     return true;
   });
 }
 
-export async function revokeInvitation(userId: string, organizationId: string, invitationId: string) {
+export async function revokeInvitation(
+  userId: string,
+  organizationId: string,
+  invitationId: string
+) {
   return withWrite(async (db) => {
     const actor = await getMembership(db, userId, organizationId);
     if (!actor) throw new Error("Forbidden");
     assertCanManageMembers(actor.role);
     const invitation = db.invitations.find(
-      (entry) => entry.id === invitationId && entry.organizationId === organizationId
+      (entry) =>
+        entry.id === invitationId && entry.organizationId === organizationId
     );
     if (!invitation) return false;
     invitation.status = "revoked";
@@ -817,15 +1130,19 @@ export async function revokeInvitation(userId: string, organizationId: string, i
   });
 }
 
-export async function getOrganizationBilling(userId: string, organizationId: string) {
+export async function getOrganizationBilling(
+  userId: string,
+  organizationId: string
+) {
   const db = await readDb();
   const member = await getMembership(db, userId, organizationId);
   if (!member) throw new Error("Forbidden");
   const org = db.organizations.find((entry) => entry.id === organizationId);
   if (!org) return null;
   const creditAccount =
-    db.creditAccounts.find((entry) => entry.organizationId === organizationId) ??
-    getDefaultCreditAccount(organizationId);
+    db.creditAccounts.find(
+      (entry) => entry.organizationId === organizationId
+    ) ?? getDefaultCreditAccount(organizationId);
   const transactions = db.transactions
     .filter((entry) => entry.organizationId === organizationId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -854,7 +1171,9 @@ export async function updateBillingSettings(
 
     const org = db.organizations.find((entry) => entry.id === organizationId);
     if (!org) return null;
-    let credit = db.creditAccounts.find((entry) => entry.organizationId === organizationId);
+    let credit = db.creditAccounts.find(
+      (entry) => entry.organizationId === organizationId
+    );
     if (!credit) {
       credit = getDefaultCreditAccount(organizationId);
       db.creditAccounts.push(credit);
@@ -864,13 +1183,22 @@ export async function updateBillingSettings(
       credit.autoReloadEnabled = updates.autoReloadEnabled;
     }
     if (typeof updates.reloadThresholdCents === "number") {
-      credit.reloadThresholdCents = Math.max(0, Math.round(updates.reloadThresholdCents));
+      credit.reloadThresholdCents = Math.max(
+        0,
+        Math.round(updates.reloadThresholdCents)
+      );
     }
     if (typeof updates.reloadAmountCents === "number") {
-      credit.reloadAmountCents = Math.max(100, Math.round(updates.reloadAmountCents));
+      credit.reloadAmountCents = Math.max(
+        100,
+        Math.round(updates.reloadAmountCents)
+      );
     }
     if (typeof updates.monthlyMaxCents === "number") {
-      credit.monthlyMaxCents = Math.max(100, Math.round(updates.monthlyMaxCents));
+      credit.monthlyMaxCents = Math.max(
+        100,
+        Math.round(updates.monthlyMaxCents)
+      );
     }
     credit.updatedAt = nowIso();
 
@@ -900,7 +1228,9 @@ export async function addManualCredits(
     if (!member) throw new Error("Forbidden");
     assertCanManageBilling(member.role);
 
-    let credit = db.creditAccounts.find((entry) => entry.organizationId === organizationId);
+    let credit = db.creditAccounts.find(
+      (entry) => entry.organizationId === organizationId
+    );
     if (!credit) {
       credit = getDefaultCreditAccount(organizationId);
       db.creditAccounts.push(credit);
@@ -953,8 +1283,12 @@ async function triggerAutoReload(
   db: SettingsDb,
   organizationId: string
 ): Promise<StripeChargeResult | null> {
-  const organization = db.organizations.find((entry) => entry.id === organizationId);
-  const credit = db.creditAccounts.find((entry) => entry.organizationId === organizationId);
+  const organization = db.organizations.find(
+    (entry) => entry.id === organizationId
+  );
+  const credit = db.creditAccounts.find(
+    (entry) => entry.organizationId === organizationId
+  );
   if (!organization || !credit) return null;
   if (!credit.autoReloadEnabled) return null;
   if (credit.balanceCents > credit.reloadThresholdCents) return null;
@@ -972,7 +1306,10 @@ async function triggerAutoReload(
     return null;
   }
 
-  const stripeCharge = await maybeCreateStripePaymentIntent(organization, credit.reloadAmountCents);
+  const stripeCharge = await maybeCreateStripePaymentIntent(
+    organization,
+    credit.reloadAmountCents
+  );
   credit.balanceCents += credit.reloadAmountCents;
   credit.updatedAt = nowIso();
   db.transactions.push({
@@ -993,10 +1330,13 @@ export async function listApiKeys(userId: string, organizationId: string) {
   if (!member) throw new Error("Forbidden");
   if (!isAdminRole(member.role)) throw new Error("Forbidden");
   const credit =
-    db.creditAccounts.find((entry) => entry.organizationId === organizationId) ??
-    getDefaultCreditAccount(organizationId);
+    db.creditAccounts.find(
+      (entry) => entry.organizationId === organizationId
+    ) ?? getDefaultCreditAccount(organizationId);
   const keys = db.apiKeys
-    .filter((entry) => entry.organizationId === organizationId && !entry.revokedAt)
+    .filter(
+      (entry) => entry.organizationId === organizationId && !entry.revokedAt
+    )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return {
     role: member.role,
@@ -1005,7 +1345,11 @@ export async function listApiKeys(userId: string, organizationId: string) {
   };
 }
 
-export async function createApiKey(userId: string, organizationId: string, name: string) {
+export async function createApiKey(
+  userId: string,
+  organizationId: string,
+  name: string
+) {
   return withWrite(async (db) => {
     const member = await getMembership(db, userId, organizationId);
     if (!member || !isAdminRole(member.role)) throw new Error("Forbidden");
@@ -1031,12 +1375,19 @@ export async function createApiKey(userId: string, organizationId: string, name:
   });
 }
 
-export async function revokeApiKey(userId: string, organizationId: string, keyId: string) {
+export async function revokeApiKey(
+  userId: string,
+  organizationId: string,
+  keyId: string
+) {
   return withWrite(async (db) => {
     const member = await getMembership(db, userId, organizationId);
     if (!member || !isAdminRole(member.role)) throw new Error("Forbidden");
     const key = db.apiKeys.find(
-      (entry) => entry.id === keyId && entry.organizationId === organizationId && !entry.revokedAt
+      (entry) =>
+        entry.id === keyId &&
+        entry.organizationId === organizationId &&
+        !entry.revokedAt
     );
     if (!key) return false;
     key.revokedAt = nowIso();
@@ -1047,9 +1398,13 @@ export async function revokeApiKey(userId: string, organizationId: string, keyId
 export async function authenticateApiKey(secret: string) {
   const db = await readDb();
   const hashed = hashApiKey(secret);
-  const key = db.apiKeys.find((entry) => entry.hashedKey === hashed && !entry.revokedAt);
+  const key = db.apiKeys.find(
+    (entry) => entry.hashedKey === hashed && !entry.revokedAt
+  );
   if (!key) return null;
-  const credit = db.creditAccounts.find((entry) => entry.organizationId === key.organizationId);
+  const credit = db.creditAccounts.find(
+    (entry) => entry.organizationId === key.organizationId
+  );
   if (!credit || credit.balanceCents <= 0) {
     return {
       ok: false as const,
@@ -1071,9 +1426,13 @@ export async function consumeCreditsByApiKey(
   description?: string
 ) {
   return withWrite(async (db) => {
-    const key = db.apiKeys.find((entry) => entry.id === apiKeyId && !entry.revokedAt);
+    const key = db.apiKeys.find(
+      (entry) => entry.id === apiKeyId && !entry.revokedAt
+    );
     if (!key) return null;
-    const credit = db.creditAccounts.find((entry) => entry.organizationId === key.organizationId);
+    const credit = db.creditAccounts.find(
+      (entry) => entry.organizationId === key.organizationId
+    );
     if (!credit) return null;
     const debit = Math.max(0, Math.round(amountCents));
     if (credit.balanceCents < debit) {
@@ -1105,7 +1464,10 @@ export async function consumeCreditsByApiKey(
   });
 }
 
-export async function createStripePortalSession(userId: string, organizationId: string) {
+export async function createStripePortalSession(
+  userId: string,
+  organizationId: string
+) {
   const db = await readDb();
   const member = await getMembership(db, userId, organizationId);
   if (!member || member.role !== "owner") throw new Error("Forbidden");
@@ -1116,16 +1478,22 @@ export async function createStripePortalSession(userId: string, organizationId: 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const body = new URLSearchParams();
   body.set("customer", `org_${organizationId}`);
-  body.set("return_url", `${appUrl}/settings/organization/billing?organizationId=${organizationId}`);
+  body.set(
+    "return_url",
+    `${appUrl}/settings/organization/billing?organizationId=${organizationId}`
+  );
 
-  const response = await fetch("https://api.stripe.com/v1/billing_portal/sessions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${stripeSecret}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
-  });
+  const response = await fetch(
+    "https://api.stripe.com/v1/billing_portal/sessions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stripeSecret}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    }
+  );
   if (!response.ok) {
     throw new Error("Failed to create Stripe portal session.");
   }
@@ -1148,8 +1516,14 @@ export async function createStripeCheckoutSession(
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const body = new URLSearchParams();
   body.set("mode", "subscription");
-  body.set("success_url", `${appUrl}/settings/organization/billing?organizationId=${organizationId}`);
-  body.set("cancel_url", `${appUrl}/settings/organization/billing?organizationId=${organizationId}`);
+  body.set(
+    "success_url",
+    `${appUrl}/settings/organization/billing?organizationId=${organizationId}`
+  );
+  body.set(
+    "cancel_url",
+    `${appUrl}/settings/organization/billing?organizationId=${organizationId}`
+  );
   body.set("line_items[0][price]", priceId);
   body.set("line_items[0][quantity]", "1");
   body.set("metadata[organization_id]", organizationId);
@@ -1169,7 +1543,10 @@ export async function createStripeCheckoutSession(
   return payload.url ?? null;
 }
 
-export async function writeSettingsUpload(storageName: string, bytes: Uint8Array) {
+export async function writeSettingsUpload(
+  storageName: string,
+  bytes: Uint8Array
+) {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   const safeName = storageName.replace(/[^a-zA-Z0-9._-]/g, "_");
   const filePath = path.join(UPLOAD_DIR, `${Date.now()}-${safeName}`);

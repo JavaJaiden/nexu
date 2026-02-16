@@ -1,8 +1,13 @@
-import { ArrowLeft, Check } from "@tamagui/lucide-icons";
 import { api } from "@packages/backend/convex/_generated/api";
+import { ArrowLeft, Check } from "@tamagui/lucide-icons";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, KeyboardAvoidingView, Platform, ScrollView } from "react-native";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from "react-native";
 import {
   Button,
   Checkbox,
@@ -17,11 +22,7 @@ import {
   YStack,
 } from "tamagui";
 
-export default function CreateNoteScreen({
-  navigation,
-}: {
-  navigation: any;
-}) {
+export default function CreateNoteScreen({ navigation }: { navigation: any }) {
   const createNote = useMutation(api.notes.createNote);
   const openaiKeySet = useQuery(api.openai.openaiKeySet) ?? true;
 
@@ -147,14 +148,17 @@ export default function CreateNoteScreen({
               opacity={openaiKeySet ? 1 : 0.5}
               onPress={() =>
                 openaiKeySet &&
-                setIsAdvancedSummarizationEnabled(!isAdvancedSummarizationEnabled)
+                setIsAdvancedSummarizationEnabled(
+                  !isAdvancedSummarizationEnabled
+                )
               }
             >
               <Checkbox
                 size="$4"
                 checked={isAdvancedSummarizationEnabled}
                 onCheckedChange={(checked) =>
-                  openaiKeySet && setIsAdvancedSummarizationEnabled(checked as boolean)
+                  openaiKeySet &&
+                  setIsAdvancedSummarizationEnabled(checked as boolean)
                 }
                 disabled={!openaiKeySet}
                 borderColor="$border"
@@ -173,7 +177,7 @@ export default function CreateNoteScreen({
                 <Paragraph fontSize={13} color="$textMuted">
                   {openaiKeySet
                     ? "Generate an AI summary"
-                    : "OpenAI key required"}
+                    : "OR_API_KEY required"}
                 </Paragraph>
               </YStack>
             </XStack>
@@ -181,12 +185,7 @@ export default function CreateNoteScreen({
         </ScrollView>
 
         {/* Create Button */}
-        <YStack
-          position="absolute"
-          bottom={30}
-          left={24}
-          right={24}
-        >
+        <YStack position="absolute" bottom={30} left={24} right={24}>
           <Button
             size="$5"
             backgroundColor="$color"

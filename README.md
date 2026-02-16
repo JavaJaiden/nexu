@@ -10,7 +10,7 @@ featuring:
 - React Native [Expo](https://expo.dev/): Mobile/native app with New Architecture
 - [Convex](https://convex.dev): Backend, database, server functions
 - [Clerk](https://clerk.dev): User authentication
-- OpenAI: Text summarization (optional)
+- OpenRouter: Text summarization (optional)
 
 The example app is a note taking app that can summarize notes using AI. Features
 include:
@@ -22,7 +22,7 @@ include:
 - Relational database
 - End to end type safety (schema definition to frontend API clients)
 - User authentication
-- Asynchronous call to an OpenAI
+- Asynchronous call to OpenRouter
 - Everything is realtime by default
 
 ## Using this example
@@ -56,9 +56,12 @@ Convex environment variables
 Make sure to enable **Google and Apple** as possible Social Connection
 providers, as these are used by the React Native login implementation.
 
-After that, optionally add the `OPENAI_API_KEY` env var from
-[OpenAI](https://platform.openai.com/account/api-keys) to your Convex
-environment variables to get AI summaries.
+Set the `OR_API_KEY` env var from
+[OpenRouter](https://openrouter.ai/settings/keys) in `apps/web/.env.local`
+for the web AI routes. If you also want Convex note summaries, add `OR_API_KEY`
+to your Convex environment variables.
+To auto-provision a unique OpenRouter key per user with limits, also set
+`OR_MANAGEMENT_KEY` in `apps/web/.env.local`.
 
 The `setup` command should now finish successfully.
 
@@ -67,6 +70,8 @@ The `setup` command should now finish successfully.
 In each app directory (`apps/web`, `apps/native`) create a `.env.local` file
 using the `.example.env` as a template and fill out your Convex and Clerk
 environment variables.
+
+Web users now need a verified phone number before accessing protected routes.
 
 - Use the `CONVEX_URL` from `packages/backend/.env.local` for
   `{NEXT,EXPO}_PUBLIC_CONVEX_URL`.

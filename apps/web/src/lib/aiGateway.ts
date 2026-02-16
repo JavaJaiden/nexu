@@ -1,6 +1,29 @@
-import { openai } from "@ai-sdk/openai";
+import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { gatewayModelIds } from "@/lib/modelGatewayRegistry";
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_MODEL_PREFIX = "openai/";
+
+const openRouterHeaders: Record<string, string> = {
+  "X-Title": "Nexu",
+};
+if (process.env.NEXT_PUBLIC_APP_URL) {
+  openRouterHeaders["HTTP-Referer"] = process.env.NEXT_PUBLIC_APP_URL;
+}
+
+export function createOpenRouterProvider(apiKey: string) {
+  return createOpenAI({
+    apiKey,
+    baseURL: OPENROUTER_BASE_URL,
+    headers: openRouterHeaders,
+    name: "openrouter",
+  });
+}
+
+export const openrouter = createOpenRouterProvider(
+  process.env.OR_API_KEY ?? ""
+);
 
 type GatewayModelSpec = {
   label: string;
@@ -9,36 +32,59 @@ type GatewayModelSpec = {
   available: boolean;
 };
 
+function normalizeOpenRouterModelId(modelId: string) {
+  return modelId.includes("/")
+    ? modelId
+    : `${OPENROUTER_MODEL_PREFIX}${modelId}`;
+}
+
 const baseOpenAIModels: GatewayModelSpec[] = [
-  { label: "gpt-4o-mini", provider: "openai", modelId: "gpt-4o-mini", available: true },
-  { label: "gpt-4o", provider: "openai", modelId: "gpt-4o", available: true },
-  { label: "gpt-4.1", provider: "openai", modelId: "gpt-4.1", available: true },
-  { label: "gpt-4.1-mini", provider: "openai", modelId: "gpt-4.1-mini", available: true },
-  { label: "o1", provider: "openai", modelId: "o1", available: true },
-  { label: "o3-mini", provider: "openai", modelId: "o3-mini", available: true },
+  {
+    label: "gpt-4o-mini",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("gpt-4o-mini"),
+    available: true,
+  },
+  {
+    label: "gpt-4o",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("gpt-4o"),
+    available: true,
+  },
+  {
+    label: "gpt-4.1",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("gpt-4.1"),
+    available: true,
+  },
+  {
+    label: "gpt-4.1-mini",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("gpt-4.1-mini"),
+    available: true,
+  },
+  {
+    label: "o1",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("o1"),
+    available: true,
+  },
+  {
+    label: "o3-mini",
+    provider: "openai",
+    modelId: normalizeOpenRouterModelId("o3-mini"),
+    available: true,
+  },
 ];
 
-const openaiAllowlist = new Set(
-  baseOpenAIModels.map((model) => model.modelId).concat([
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-instruct",
-    "gpt-4-turbo",
-    "o3",
-    "o3-mini",
-    "o3-pro",
-    "o4-mini",
-  ])
-);
-
 const registryModels: GatewayModelSpec[] = gatewayModelIds.map((id) => {
-  const [provider, modelKey] = id.split("/");
-  const isOpenAI = provider === "openai";
-  const normalizedModelId = isOpenAI ? modelKey : modelKey;
+  const [provider] = id.split("/");
+  const normalizedModelId = normalizeOpenRouterModelId(id);
   return {
     label: id,
     provider,
     modelId: normalizedModelId,
-    available: isOpenAI && openaiAllowlist.has(normalizedModelId),
+    available: true,
   };
 });
 
@@ -70,34 +116,42 @@ const availableOpenAI = gatewayModels
   .filter((entry) => entry.provider === "openai" && entry.available)
   .map((entry) => entry.label);
 
-function pickCandidate(candidates: string[], usageCounts: UsageCounts, maxSame: number) {
+function pickCandidate(
+  candidates: string[],
+  usageCounts: UsageCounts,
+  maxSame: number
+) {
   const sorted = [...candidates].sort(
     (a, b) => (usageCounts[a] ?? 0) - (usageCounts[b] ?? 0)
   );
-  return sorted.find((candidate) => (usageCounts[candidate] ?? 0) < maxSame) ?? sorted[0];
+  return (
+    sorted.find((candidate) => (usageCounts[candidate] ?? 0) < maxSame) ??
+    sorted[0]
+  );
 }
 
 export function resolveRouterModel(
   routerLabel: string,
   usageCounts: UsageCounts,
-  maxSame: number
+  maxSame: number,
+  provider = openrouter
 ): GatewayResolution {
-  const candidates = (routerCandidates[routerLabel] ?? availableOpenAI).filter((candidate) =>
-    availableOpenAI.includes(candidate)
+  const candidates = (routerCandidates[routerLabel] ?? availableOpenAI).filter(
+    (candidate) => availableOpenAI.includes(candidate)
   );
   const fallback = candidates.length > 0 ? candidates : ["gpt-4o-mini"];
   const picked = pickCandidate(fallback, usageCounts, maxSame);
   const spec = gatewayModels.find((entry) => entry.label === picked);
   if (!spec) {
     return {
-      model: openai("gpt-4o-mini"),
+      model: provider(normalizeOpenRouterModelId("gpt-4o-mini")),
       resolvedLabel: "gpt-4o-mini",
       requestedLabel: routerLabel,
       fallbackNote: "Fallback to gpt-4o-mini.",
     };
   }
   return {
-    model: openai(spec.modelId),
+    model: provider(spec.modelId),
     resolvedLabel: spec.label,
     requestedLabel: routerLabel,
   };
@@ -106,11 +160,13 @@ export function resolveRouterModel(
 export function resolveGatewayModel(
   preferredLabel: string | null,
   fallbackLabel: string,
-  fallbackModelId: string
+  fallbackModelId: string,
+  provider = openrouter
 ): GatewayResolution {
+  const normalizedFallbackModelId = normalizeOpenRouterModelId(fallbackModelId);
   if (!preferredLabel) {
     return {
-      model: openai(fallbackModelId),
+      model: provider(normalizedFallbackModelId),
       resolvedLabel: fallbackLabel,
     };
   }
@@ -118,16 +174,16 @@ export function resolveGatewayModel(
   const spec = gatewayModels.find((entry) => entry.label === preferredLabel);
   if (!spec) {
     return {
-      model: openai(fallbackModelId),
+      model: provider(normalizedFallbackModelId),
       resolvedLabel: fallbackLabel,
       requestedLabel: preferredLabel,
       fallbackNote: `Requested model ${preferredLabel} is not in the gateway yet.`,
     };
   }
 
-  if (!spec.available || spec.provider !== "openai") {
+  if (!spec.available) {
     return {
-      model: openai(fallbackModelId),
+      model: provider(normalizedFallbackModelId),
       resolvedLabel: fallbackLabel,
       requestedLabel: preferredLabel,
       fallbackNote: `Requested model ${preferredLabel} is not available yet. Routed to ${fallbackLabel}.`,
@@ -135,7 +191,7 @@ export function resolveGatewayModel(
   }
 
   return {
-    model: openai(spec.modelId),
+    model: provider(spec.modelId),
     resolvedLabel: spec.label,
     requestedLabel: preferredLabel,
   };

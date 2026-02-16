@@ -110,3 +110,20 @@ export type UserConnectionRecord = {
   provider: "google";
   connectedAt: string;
 };
+
+export type UserOpenRouterKeyRecord = {
+  id: string;
+  userId: string;
+  key: string;
+  name: string;
+  hash?: string;
+  disabled?: boolean;
+  limit?: number | null;
+  limitRemaining?: number | null;
+  limitReset?: "daily" | "weekly" | "monthly" | null;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  requestCountDate: string;
+  requestCount: number;
+};

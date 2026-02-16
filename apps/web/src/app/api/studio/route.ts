@@ -1,13 +1,19 @@
+import { auth } from "@clerk/nextjs/server";
 import { convertToCoreMessages, generateObject, streamText, tool } from "ai";
-import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
-import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
+import {
+  createOpenRouterProvider,
+  resolveGatewayModel,
+  resolveRouterModel,
+} from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { consumeUserOpenRouterAccess } from "@/lib/server/settingsDatabase";
 
 const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   {
     subject: "Mathematics",
-    keywords: /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
+    keywords:
+      /(integral|derivative|limit|algebra|geometry|calculus|equation|sin|cos|tan)/i,
   },
   {
     subject: "Physics",
@@ -15,7 +21,8 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   },
   {
     subject: "Computer Science",
-    keywords: /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
+    keywords:
+      /(python|javascript|typescript|java|bug|debug|compile|algorithm|function|stack)/i,
   },
   {
     subject: "Writing",
@@ -27,7 +34,10 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   },
 ];
 
-const modelMap: Record<string, { label: string; modelId: string; rationale: string }> = {
+const modelMap: Record<
+  string,
+  { label: string; modelId: string; rationale: string }
+> = {
   Mathematics: {
     label: "Nexus-Math",
     modelId: "gpt-4o-mini",
@@ -83,33 +93,60 @@ function formatLatency(ms: number) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
+  const { userId } = await auth();
+  if (!userId) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
-  const { messages, mode, preferredModel, preferredModels, aggregatorModel, attachments, stepsMode } =
-    (await req.json()) as {
-      messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-      mode?: "fast" | "deep";
-      preferredModel?: string;
-      preferredModels?: string[];
-      aggregatorModel?: string;
-      attachments?: Array<{ name: string; type: string; data: string }>;
-      stepsMode?: "brief" | "detailed";
-    };
+  let userProvider: ReturnType<typeof createOpenRouterProvider>;
+  try {
+    const access = await consumeUserOpenRouterAccess(userId);
+    userProvider = createOpenRouterProvider(access.apiKey);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to prepare OpenRouter access.";
+    const status = message.toLowerCase().includes("limit") ? 429 : 500;
+    return new Response(message, { status });
+  }
+
+  const {
+    messages,
+    mode,
+    preferredModel,
+    preferredModels,
+    aggregatorModel,
+    attachments,
+    stepsMode,
+  } = (await req.json()) as {
+    messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+    mode?: "fast" | "deep";
+    preferredModel?: string;
+    preferredModels?: string[];
+    aggregatorModel?: string;
+    attachments?: Array<{ name: string; type: string; data: string }>;
+    stepsMode?: "brief" | "detailed";
+  };
 
   const selectedMode = mode ?? "fast";
   const inputMessages = messages ?? [];
-  const preferredLabel = typeof preferredModel === "string" ? preferredModel : null;
+  const preferredLabel =
+    typeof preferredModel === "string" ? preferredModel : null;
   const preferredStack = Array.isArray(preferredModels)
     ? preferredModels.filter((entry) => typeof entry === "string")
     : [];
   const normalizedStack = Array.from(
     new Set(preferredStack.filter((entry) => entry && entry !== "auto"))
   );
-  const aggregatorLabel = typeof aggregatorModel === "string" ? aggregatorModel : null;
-  const preferredIsNexus = preferredLabel ? preferredLabel in modelLabelToId : false;
-  const preferredIsExternal = Boolean(preferredLabel && !preferredIsNexus && preferredLabel !== "auto");
+  const aggregatorLabel =
+    typeof aggregatorModel === "string" ? aggregatorModel : null;
+  const preferredIsNexus = preferredLabel
+    ? preferredLabel in modelLabelToId
+    : false;
+  const preferredIsExternal = Boolean(
+    preferredLabel && !preferredIsNexus && preferredLabel !== "auto"
+  );
   const usageCounts: Record<string, number> = {};
   const normalizedStepsMode = stepsMode === "detailed" ? "detailed" : "brief";
   const minSteps = normalizedStepsMode === "detailed" ? 4 : 2;
@@ -121,7 +158,7 @@ export async function POST(req: Request) {
   );
 
   const result = streamText({
-    model: openai("gpt-4o-mini"),
+    model: userProvider("openai/gpt-4o-mini"),
     system: `You are the Nexus routing assistant. For each user question:
 1) Call detectSubject with the question.
 2) Call routeModel with the detected subject and the mode (${selectedMode}).
@@ -150,19 +187,28 @@ Keep answers structured and homework-safe.`,
         execute: async ({ subject, mode }) => {
           const fallbackEntry = modelMap[subject] ?? modelMap.General;
           const entry = preferredIsNexus
-            ? Object.values(modelMap).find((item) => item.label === preferredLabel) ?? fallbackEntry
+            ? (Object.values(modelMap).find(
+                (item) => item.label === preferredLabel
+              ) ?? fallbackEntry)
             : fallbackEntry;
-          const modeNote = mode === "deep" ? "Deep mode prioritizes reasoning." : "Fast mode prioritizes speed.";
+          const modeNote =
+            mode === "deep"
+              ? "Deep mode prioritizes reasoning."
+              : "Fast mode prioritizes speed.";
           const baseConfidence = subject === "General" ? 0.68 : 0.78;
           const confidence =
-            mode === "deep" ? Math.min(0.95, baseConfidence + 0.08) : baseConfidence;
+            mode === "deep"
+              ? Math.min(0.95, baseConfidence + 0.08)
+              : baseConfidence;
           const selectionNote = preferredIsExternal
             ? "User-selected external model via Model Hub."
             : preferredIsNexus
               ? "User-selected Nexus router."
               : "";
           const stackNote =
-            normalizedStack.length > 0 ? `User stacked ${normalizedStack.length} models.` : "";
+            normalizedStack.length > 0
+              ? `User stacked ${normalizedStack.length} models.`
+              : "";
           return {
             model:
               normalizedStack.length > 0
@@ -171,14 +217,16 @@ Keep answers structured and homework-safe.`,
                   ? preferredLabel
                   : entry.label,
             modelId: entry.modelId,
-            rationale: `${entry.rationale} ${modeNote} ${selectionNote} ${stackNote}`.trim(),
+            rationale:
+              `${entry.rationale} ${modeNote} ${selectionNote} ${stackNote}`.trim(),
             mode: mode ?? selectedMode,
             confidence,
           };
         },
       }),
       solveQuestion: tool({
-        description: "Solve the question with a structured, step-by-step answer.",
+        description:
+          "Solve the question with a structured, step-by-step answer.",
         parameters: z.object({
           question: z.string(),
           subject: z.string().optional(),
@@ -195,11 +243,13 @@ Keep answers structured and homework-safe.`,
             ? preferredLabel
             : preferredIsNexus
               ? preferredLabel
-              : model ?? selected.label;
+              : (model ?? selected.label);
           const stackedLabels =
             normalizedStack.length > 0
               ? normalizedStack
-              : [fallbackLabelOverride].filter((entry): entry is string => Boolean(entry));
+              : [fallbackLabelOverride].filter((entry): entry is string =>
+                  Boolean(entry)
+                );
           const solveOutputs = [];
 
           for (const label of stackedLabels) {
@@ -208,44 +258,91 @@ Keep answers structured and homework-safe.`,
               ? `Routed by ${label} to diversify model usage.`
               : "User-selected model from Model Hub.";
             let gateway = isRouter
-              ? resolveRouterModel(label, usageCounts, maxSame)
-              : resolveGatewayModel(label, fallbackLabel, fallbackModelId);
+              ? resolveRouterModel(label, usageCounts, maxSame, userProvider)
+              : resolveGatewayModel(
+                  label,
+                  fallbackLabel,
+                  fallbackModelId,
+                  userProvider
+                );
 
             const currentCount = usageCounts[gateway.resolvedLabel] ?? 0;
             if (currentCount >= maxSame) {
               const overuseLabel = gateway.resolvedLabel;
-              const reroute = resolveRouterModel("Nexus-Core", usageCounts, maxSame);
+              const reroute = resolveRouterModel(
+                "Nexus-Core",
+                usageCounts,
+                maxSame,
+                userProvider
+              );
               gateway = {
                 ...reroute,
                 fallbackNote: `Rerouted from ${overuseLabel} to avoid overuse.`,
               };
               selectionReason = `Rerouted from ${overuseLabel} to avoid using the same model more than ${maxSame} times.`;
             }
-            usageCounts[gateway.resolvedLabel] = (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
+            usageCounts[gateway.resolvedLabel] =
+              (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
 
             const startedAt = Date.now();
-            const result = await generateObject({
-              model: gateway.model,
-              schema: z.object({
-                steps: z.array(z.string()).min(minSteps).max(maxSteps),
-                final: z.string(),
-                confidence: z.number().min(0).max(1),
-              }),
-              system:
-                normalizedStepsMode === "detailed"
-                  ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
-                  : "You are a homework assistant. Provide clear, concise steps and a final answer.",
-              prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
-                externalContext ? `\nContext:\n${externalContext}\n` : ""
-              }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
-            });
+            const result = await (async () => {
+              try {
+                return await generateObject({
+                  model: gateway.model,
+                  schema: z.object({
+                    steps: z.array(z.string()).min(minSteps).max(maxSteps),
+                    final: z.string(),
+                    confidence: z.number().min(0).max(1),
+                  }),
+                  system:
+                    normalizedStepsMode === "detailed"
+                      ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
+                      : "You are a homework assistant. Provide clear, concise steps and a final answer.",
+                  prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
+                    externalContext ? `\nContext:\n${externalContext}\n` : ""
+                  }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
+                });
+              } catch {
+                const fallbackGateway = resolveRouterModel(
+                  "Nexus-Core",
+                  usageCounts,
+                  maxSame,
+                  userProvider
+                );
+                gateway = {
+                  ...fallbackGateway,
+                  fallbackNote: `Primary model ${label} failed to return structured output. Routed to ${fallbackGateway.resolvedLabel}.`,
+                };
+                usageCounts[gateway.resolvedLabel] =
+                  (usageCounts[gateway.resolvedLabel] ?? 0) + 1;
+                selectionReason = `Fallback to ${gateway.resolvedLabel} after structured output failure from ${label}.`;
+                return await generateObject({
+                  model: gateway.model,
+                  schema: z.object({
+                    steps: z.array(z.string()).min(minSteps).max(maxSteps),
+                    final: z.string(),
+                    confidence: z.number().min(0).max(1),
+                  }),
+                  system:
+                    normalizedStepsMode === "detailed"
+                      ? "You are a homework assistant. Provide clear, student-friendly steps with brief reasoning and a final answer."
+                      : "You are a homework assistant. Provide clear, concise steps and a final answer.",
+                  prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
+                    externalContext ? `\nContext:\n${externalContext}\n` : ""
+                  }\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
+                });
+              }
+            })();
             const durationMs = Date.now() - startedAt;
 
             solveOutputs.push({
               steps: result.object.steps,
               final: result.object.final,
               confidence: result.object.confidence,
-              citations: [`Model: ${gateway.resolvedLabel}`, `Time: ${formatLatency(durationMs)}`],
+              citations: [
+                `Model: ${gateway.resolvedLabel}`,
+                `Time: ${formatLatency(durationMs)}`,
+              ],
               durationMs,
               model: gateway.resolvedLabel,
               gatewayNote: gateway.fallbackNote,
@@ -254,32 +351,88 @@ Keep answers structured and homework-safe.`,
             });
           }
 
-          const shouldAggregate = stackedLabels.length > 1 || Boolean(aggregatorLabel);
+          const shouldAggregate =
+            stackedLabels.length > 1 || Boolean(aggregatorLabel);
           if (!shouldAggregate) return solveOutputs;
 
-          const aggregatorSource = aggregatorLabel && aggregatorLabel !== "auto" ? aggregatorLabel : "Nexus-Core";
+          const aggregatorSource =
+            aggregatorLabel && aggregatorLabel !== "auto"
+              ? aggregatorLabel
+              : "Nexus-Core";
           const aggregatorIsRouter = aggregatorSource.startsWith("Nexus-");
-          const aggregatorGateway = aggregatorIsRouter
-            ? resolveRouterModel(aggregatorSource, usageCounts, maxSame)
-            : resolveGatewayModel(aggregatorSource, fallbackLabel, fallbackModelId);
+          let aggregatorGateway = aggregatorIsRouter
+            ? resolveRouterModel(
+                aggregatorSource,
+                usageCounts,
+                maxSame,
+                userProvider
+              )
+            : resolveGatewayModel(
+                aggregatorSource,
+                fallbackLabel,
+                fallbackModelId,
+                userProvider
+              );
           const aggregatorStarted = Date.now();
-          const aggregateResult = await generateObject({
-            model: aggregatorGateway.model,
-            schema: z.object({
-              steps: z.array(z.string()).min(minSteps).max(maxSteps),
-              final: z.string(),
-              confidence: z.number().min(0).max(1),
-            }),
-            system:
-              normalizedStepsMode === "detailed"
-                ? "You are an aggregator. Combine multiple model answers into one clear, student-friendly response with detailed steps and a final answer."
-                : `You are an aggregator. Combine multiple model answers into one clear, concise response with ${minSteps}-${maxSteps} steps and a final answer.`,
-            prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
-              externalContext ? `\nContext:\n${externalContext}\n` : ""
-            }\nModel answers:\n${solveOutputs
-              .map((solve, index) => `Answer ${index + 1} (${solve.model}): ${solve.final}`)
-              .join("\n")}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
-          });
+          const aggregateResult = await (async () => {
+            try {
+              return await generateObject({
+                model: aggregatorGateway.model,
+                schema: z.object({
+                  steps: z.array(z.string()).min(minSteps).max(maxSteps),
+                  final: z.string(),
+                  confidence: z.number().min(0).max(1),
+                }),
+                system:
+                  normalizedStepsMode === "detailed"
+                    ? "You are an aggregator. Combine multiple model answers into one clear, student-friendly response with detailed steps and a final answer."
+                    : `You are an aggregator. Combine multiple model answers into one clear, concise response with ${minSteps}-${maxSteps} steps and a final answer.`,
+                prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
+                  externalContext ? `\nContext:\n${externalContext}\n` : ""
+                }\nModel answers:\n${solveOutputs
+                  .map(
+                    (solve, index) =>
+                      `Answer ${index + 1} (${solve.model}): ${solve.final}`
+                  )
+                  .join(
+                    "\n"
+                  )}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
+              });
+            } catch {
+              const fallbackGateway = resolveRouterModel(
+                "Nexus-Core",
+                usageCounts,
+                maxSame,
+                userProvider
+              );
+              aggregatorGateway = {
+                ...fallbackGateway,
+                fallbackNote: `Primary aggregator model failed to return structured output. Routed to ${fallbackGateway.resolvedLabel}.`,
+              };
+              return await generateObject({
+                model: aggregatorGateway.model,
+                schema: z.object({
+                  steps: z.array(z.string()).min(minSteps).max(maxSteps),
+                  final: z.string(),
+                  confidence: z.number().min(0).max(1),
+                }),
+                system:
+                  normalizedStepsMode === "detailed"
+                    ? "You are an aggregator. Combine multiple model answers into one clear, student-friendly response with detailed steps and a final answer."
+                    : `You are an aggregator. Combine multiple model answers into one clear, concise response with ${minSteps}-${maxSteps} steps and a final answer.`,
+                prompt: `Subject: ${subject ?? "General"}\nMode: ${mode ?? selectedMode}\nQuestion: ${question}\n${
+                  externalContext ? `\nContext:\n${externalContext}\n` : ""
+                }\nModel answers:\n${solveOutputs
+                  .map(
+                    (solve, index) =>
+                      `Answer ${index + 1} (${solve.model}): ${solve.final}`
+                  )
+                  .join(
+                    "\n"
+                  )}\nReturn ${minSteps}-${maxSteps} steps, a final answer, and a confidence score between 0 and 1.`,
+              });
+            }
+          })();
           const aggregateDuration = Date.now() - aggregatorStarted;
           const aggregateSelectionReason =
             aggregatorLabel && aggregatorLabel !== "auto"
