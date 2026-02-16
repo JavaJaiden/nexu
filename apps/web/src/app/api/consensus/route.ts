@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   const aggregatorLabel =
     typeof aggregatorModel === "string" ? aggregatorModel : null;
   const fallbackLabel = "Nexus-Core";
-  const fallbackModelId = "gpt-4o-mini";
+  const fallbackModelId = "openai/gpt-4o-mini";
   const normalizedTemperature =
     typeof temperature === "number" && Number.isFinite(temperature)
       ? Math.min(1, Math.max(0, temperature))
@@ -64,48 +64,66 @@ export async function POST(req: Request) {
     temperature: normalizedTemperature,
     maxTokens: normalizedMaxTokens,
   } as any;
-  const result = await generateObject({
-    model: gateway.model,
-    schema: z.object({
-      steps: z.array(z.string()).min(2).max(6),
-      final: z.string(),
-      confidence: z.number().min(0).max(1),
-    }),
-    ...generationConfig,
-    system:
-      "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
-    prompt: `Question: ${question}\n${
-      externalContext ? `\nContext:\n${externalContext}\n` : ""
-    }\nModel answers:\n${answers
-      .map(
-        (answer, index) =>
-          `Answer ${index + 1} (${answer.model}): ${answer.final}`
-      )
-      .join(
-        "\n"
-      )}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
-  });
-  const durationMs = Date.now() - startedAt;
-  const generated = result.object as {
-    steps: string[];
-    final: string;
-    confidence: number;
-  };
-  const selectionReason = aggregatorLabel
-    ? `User-selected aggregator (${aggregatorLabel}).`
-    : "Auto-selected Nexus aggregator.";
+  try {
+    const result = await generateObject({
+      model: gateway.model,
+      schema: z.object({
+        steps: z.array(z.string()).min(2).max(6),
+        final: z.string(),
+        confidence: z.number().min(0).max(1),
+      }),
+      ...generationConfig,
+      system:
+        "You are an aggregator. Combine multiple model answers into one clear, concise response with 2-6 steps and a final answer.",
+      prompt: `Question: ${question}\n${
+        externalContext ? `\nContext:\n${externalContext}\n` : ""
+      }\nModel answers:\n${answers
+        .map(
+          (answer, index) =>
+            `Answer ${index + 1} (${answer.model}): ${answer.final}`
+        )
+        .join(
+          "\n"
+        )}\nReturn 2-6 steps, a final answer, and a confidence score between 0 and 1.`,
+    });
+    const durationMs = Date.now() - startedAt;
+    const generated = result.object as {
+      steps: string[];
+      final: string;
+      confidence: number;
+    };
+    const selectionReason = aggregatorLabel
+      ? `User-selected aggregator (${aggregatorLabel}).`
+      : "Auto-selected Nexus aggregator.";
 
-  return Response.json({
-    model: gateway.resolvedLabel,
-    steps: generated.steps,
-    final: generated.final,
-    confidence: generated.confidence,
-    durationMs,
-    gatewayNote: gateway.fallbackNote,
-    selectionReason,
-    citations: [
-      `Model: ${gateway.resolvedLabel}`,
-      `Time: ${formatLatency(durationMs)}`,
-    ],
-  });
+    return Response.json({
+      model: gateway.resolvedLabel,
+      steps: generated.steps,
+      final: generated.final,
+      confidence: generated.confidence,
+      durationMs,
+      gatewayNote: gateway.fallbackNote,
+      selectionReason,
+      citations: [
+        `Model: ${gateway.resolvedLabel}`,
+        `Time: ${formatLatency(durationMs)}`,
+      ],
+    });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    console.error("Consensus generation failed", {
+      model: gateway.resolvedLabel,
+      requested: aggregatorLabel ?? "Nexus-Core",
+      details,
+    });
+    return Response.json(
+      {
+        error: "Consensus generation failed",
+        model: gateway.resolvedLabel,
+        requestedModel: aggregatorLabel ?? "Nexus-Core",
+        details,
+      },
+      { status: 500 }
+    );
+  }
 }

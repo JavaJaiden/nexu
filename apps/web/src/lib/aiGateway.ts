@@ -13,24 +13,39 @@ const baseOpenAIModels: GatewayModelSpec[] = [
   {
     label: "gpt-4o-mini",
     provider: "openai",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     available: true,
   },
-  { label: "gpt-4o", provider: "openai", modelId: "gpt-4o", available: true },
-  { label: "gpt-4.1", provider: "openai", modelId: "gpt-4.1", available: true },
+  {
+    label: "gpt-4o",
+    provider: "openai",
+    modelId: "openai/gpt-4o",
+    available: true,
+  },
+  {
+    label: "gpt-4.1",
+    provider: "openai",
+    modelId: "openai/gpt-4.1",
+    available: true,
+  },
   {
     label: "gpt-4.1-mini",
     provider: "openai",
-    modelId: "gpt-4.1-mini",
+    modelId: "openai/gpt-4.1-mini",
     available: true,
   },
-  { label: "o1", provider: "openai", modelId: "o1", available: true },
-  { label: "o3-mini", provider: "openai", modelId: "o3-mini", available: true },
+  { label: "o1", provider: "openai", modelId: "openai/o1", available: true },
+  {
+    label: "o3-mini",
+    provider: "openai",
+    modelId: "openai/o3-mini",
+    available: true,
+  },
 ];
 
 const openaiAllowlist = new Set(
   baseOpenAIModels
-    .map((model) => model.modelId)
+    .map((model) => model.label)
     .concat([
       "gpt-3.5-turbo",
       "gpt-3.5-turbo-instruct",
@@ -44,13 +59,11 @@ const openaiAllowlist = new Set(
 
 const registryModels: GatewayModelSpec[] = gatewayModelIds.map((id) => {
   const [provider, modelKey] = id.split("/");
-  const isOpenAI = provider === "openai";
-  const normalizedModelId = isOpenAI ? modelKey : modelKey;
   return {
     label: id,
     provider,
-    modelId: normalizedModelId,
-    available: isOpenAI && openaiAllowlist.has(normalizedModelId),
+    modelId: id,
+    available: provider === "openai" ? openaiAllowlist.has(modelKey) : true,
   };
 });
 
@@ -109,7 +122,7 @@ export function resolveRouterModel(
   const spec = gatewayModels.find((entry) => entry.label === picked);
   if (!spec) {
     return {
-      model: orOpenAI("gpt-4o-mini"),
+      model: orOpenAI("openai/gpt-4o-mini"),
       resolvedLabel: "gpt-4o-mini",
       requestedLabel: routerLabel,
       fallbackNote: "Fallback to gpt-4o-mini.",
@@ -144,7 +157,7 @@ export function resolveGatewayModel(
     };
   }
 
-  if (!spec.available || spec.provider !== "openai") {
+  if (!spec.available) {
     return {
       model: orOpenAI(fallbackModelId),
       resolvedLabel: fallbackLabel,

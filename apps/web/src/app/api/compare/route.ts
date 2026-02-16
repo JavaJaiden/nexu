@@ -29,10 +29,10 @@ const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
 ];
 
 const modelMap: Record<string, { label: string; modelId: string }> = {
-  "Nexus-Core": { label: "Nexus-Core", modelId: "gpt-4o-mini" },
-  "Nexus-Math": { label: "Nexus-Math", modelId: "gpt-4o-mini" },
-  "Nexus-Code": { label: "Nexus-Code", modelId: "gpt-4o-mini" },
-  "Nexus-Write": { label: "Nexus-Write", modelId: "gpt-4o-mini" },
+  "Nexus-Core": { label: "Nexus-Core", modelId: "openai/gpt-4o-mini" },
+  "Nexus-Math": { label: "Nexus-Math", modelId: "openai/gpt-4o-mini" },
+  "Nexus-Code": { label: "Nexus-Code", modelId: "openai/gpt-4o-mini" },
+  "Nexus-Write": { label: "Nexus-Write", modelId: "openai/gpt-4o-mini" },
 };
 
 function detectSubject(question: string) {
@@ -160,7 +160,7 @@ export async function POST(req: Request) {
           typeof requestedLabel === "string" ? requestedLabel : "Nexus-Core";
         const mapped = modelMap[normalized];
         const fallbackLabel = mapped?.label ?? "Nexus-Core";
-        const fallbackModelId = mapped?.modelId ?? "gpt-4o-mini";
+        const fallbackModelId = mapped?.modelId ?? "openai/gpt-4o-mini";
         const isRouter = normalized.startsWith("Nexus-");
         let selectionReason = isRouter
           ? `Routed by ${normalized} to diversify model usage.`

@@ -35,32 +35,32 @@ const modelMap: Record<
 > = {
   Mathematics: {
     label: "Nexus-Math",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "High accuracy on quantitative reasoning with fast latency.",
   },
   Physics: {
     label: "Nexus-Math",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "Strong performance on physics problem solving.",
   },
   "Computer Science": {
     label: "Nexus-Code",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "Reliable for code reasoning and debugging tasks.",
   },
   Writing: {
     label: "Nexus-Write",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "Optimized for structured writing support.",
   },
   History: {
     label: "Nexus-Write",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "Performs well on explanatory writing and context.",
   },
   General: {
     label: "Nexus-Core",
-    modelId: "gpt-4o-mini",
+    modelId: "openai/gpt-4o-mini",
     rationale: "Balanced performance across mixed subjects.",
   },
 };
@@ -139,7 +139,7 @@ export async function POST(req: Request) {
   );
 
   const result = streamText({
-    model: orOpenAI("gpt-4o-mini"),
+    model: orOpenAI("openai/gpt-4o-mini"),
     system: `You are the Nexus routing assistant. For each user question:
 1) Call detectSubject with the question.
 2) Call routeModel with the detected subject and the mode (${selectedMode}).
