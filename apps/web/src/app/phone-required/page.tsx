@@ -1,10 +1,12 @@
+"use client";
+
 import { Suspense } from "react";
-import PhoneRequiredClientDynamic from "./PhoneRequiredClientDynamic";
+import PhoneRequiredClient from "./PhoneRequiredClient";
 
 export default function PhoneRequiredPage() {
   return (
     <Suspense fallback={null}>
-      <PhoneRequiredClientDynamic />
+      <PhoneRequiredClient />
     </Suspense>
   );
 }
