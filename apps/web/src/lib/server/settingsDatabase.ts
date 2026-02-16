@@ -257,16 +257,40 @@ type OpenRouterCreateKeyResponse = {
 };
 
 function getOpenRouterManagementKey() {
-  return process.env.OR_MANAGEMENT_KEY ?? process.env.OR_API_KEY ?? "";
+  return (process.env.OR_MANAGEMENT_KEY ?? "").trim();
+}
+
+function getSharedOpenRouterApiKey() {
+  return (process.env.OR_API_KEY ?? "").trim();
+}
+
+function createSharedKeyFallbackRecord(
+  userId: string
+): UserOpenRouterKeyRecord {
+  const key = getSharedOpenRouterApiKey();
+  if (!key) {
+    throw new Error("Missing OR_API_KEY.");
+  }
+  const now = nowIso();
+  return {
+    id: `shared-${userId}`,
+    userId,
+    key,
+    name: "shared-openrouter-key-fallback",
+    createdAt: now,
+    updatedAt: now,
+    requestCountDate: currentDateKey(),
+    requestCount: 0,
+  };
 }
 
 async function createOpenRouterUserKey(
-  userId: string
+  userId: string,
+  managementKey: string
 ): Promise<UserOpenRouterKeyRecord> {
-  const managementKey = getOpenRouterManagementKey();
   if (!managementKey) {
     throw new Error(
-      "Missing OR_MANAGEMENT_KEY or OR_API_KEY for OpenRouter key provisioning."
+      "Missing OR_MANAGEMENT_KEY for OpenRouter key provisioning."
     );
   }
 
@@ -335,7 +359,16 @@ export async function consumeUserOpenRouterAccess(userId: string) {
       ) ?? null;
 
     if (!keyRecord) {
-      keyRecord = await createOpenRouterUserKey(userId);
+      const managementKey = getOpenRouterManagementKey();
+      if (managementKey) {
+        try {
+          keyRecord = await createOpenRouterUserKey(userId, managementKey);
+        } catch {
+          keyRecord = createSharedKeyFallbackRecord(userId);
+        }
+      } else {
+        keyRecord = createSharedKeyFallbackRecord(userId);
+      }
       db.openRouterKeys = db.openRouterKeys.filter(
         (entry) => entry.userId !== userId
       );

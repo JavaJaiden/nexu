@@ -41,7 +41,9 @@ export async function runModel({
         }))
         .filter((message) => message.content.length > 0)
     : [];
-  const lastUser = [...normalizedMessages].reverse().find((message) => message.role === "user");
+  const lastUser = [...normalizedMessages]
+    .reverse()
+    .find((message) => message.role === "user");
   const question = lastUser?.content ?? "";
   const response = await fetch("/api/compare", {
     method: "POST",
@@ -58,8 +60,12 @@ export async function runModel({
     }),
     signal,
   });
-  if (!response.ok || !response.body) {
-    throw new Error("Model request failed");
+  if (!response.ok) {
+    const message = (await response.text().catch(() => "")).trim();
+    throw new Error(message || `Model request failed (${response.status})`);
+  }
+  if (!response.body) {
+    throw new Error("Model request failed: empty response stream");
   }
 
   const reader = response.body.getReader();
@@ -87,16 +93,28 @@ export async function runModel({
       if (event.type === "result" && event.payload) {
         finalText = event.payload.final ?? "";
         latencyMs = event.payload.durationMs;
-        steps = Array.isArray(event.payload.steps) ? event.payload.steps : steps;
-        confidence = typeof event.payload.confidence === "number" ? event.payload.confidence : confidence;
-        citations = Array.isArray(event.payload.citations) ? event.payload.citations : citations;
+        steps = Array.isArray(event.payload.steps)
+          ? event.payload.steps
+          : steps;
+        confidence =
+          typeof event.payload.confidence === "number"
+            ? event.payload.confidence
+            : confidence;
+        citations = Array.isArray(event.payload.citations)
+          ? event.payload.citations
+          : citations;
         selectionReason =
           typeof event.payload.selectionReason === "string"
             ? event.payload.selectionReason
             : selectionReason;
         gatewayNote =
-          typeof event.payload.gatewayNote === "string" ? event.payload.gatewayNote : gatewayNote;
-        usedModel = typeof event.payload.usedModel === "string" ? event.payload.usedModel : usedModel;
+          typeof event.payload.gatewayNote === "string"
+            ? event.payload.gatewayNote
+            : gatewayNote;
+        usedModel =
+          typeof event.payload.usedModel === "string"
+            ? event.payload.usedModel
+            : usedModel;
       }
     }
   }
@@ -157,7 +175,8 @@ export function aggregateFallback(
     const words = result.text.split(/\s+/).filter(Boolean).length;
     const hasMath = /[=+\-/*^]/.test(result.text);
     const hasSteps = /step|first|second|therefore|thus/i.test(result.text);
-    const score = Math.min(words, 220) + (hasMath ? 30 : 0) + (hasSteps ? 20 : 0);
+    const score =
+      Math.min(words, 220) + (hasMath ? 30 : 0) + (hasSteps ? 20 : 0);
     return { result, score };
   });
   scoring.sort((a, b) => b.score - a.score);
@@ -193,11 +212,16 @@ export async function runAggregator(params: {
       }),
     });
     if (!response.ok) throw new Error("Aggregator request failed");
-    const payload = (await response.json()) as { final: string; confidence?: number };
+    const payload = (await response.json()) as {
+      final: string;
+      confidence?: number;
+    };
     return {
       text: payload.final ?? "",
       confidence: payload.confidence,
-      attribution: { modelIdsUsed: params.results.map((result) => result.modelId) },
+      attribution: {
+        modelIdsUsed: params.results.map((result) => result.modelId),
+      },
     };
   } catch {
     return aggregateFallback(params.question, params.results);
