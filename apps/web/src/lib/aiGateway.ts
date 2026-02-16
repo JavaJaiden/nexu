@@ -12,18 +12,26 @@ if (process.env.NEXT_PUBLIC_APP_URL) {
   openRouterHeaders["HTTP-Referer"] = process.env.NEXT_PUBLIC_APP_URL;
 }
 
-export function createOpenRouterProvider(apiKey: string) {
+function requireOpenRouterApiKey(apiKey: string | undefined) {
+  const normalized = (apiKey ?? "").trim();
+  if (!normalized) {
+    throw new Error("Missing OR_API_KEY for OpenRouter provider.");
+  }
+  return normalized;
+}
+
+export function createOpenRouterProvider(apiKey: string | undefined) {
   return createOpenAI({
-    apiKey,
+    apiKey: requireOpenRouterApiKey(apiKey),
     baseURL: OPENROUTER_BASE_URL,
     headers: openRouterHeaders,
     name: "openrouter",
   });
 }
 
-export const openrouter = createOpenRouterProvider(
-  process.env.OR_API_KEY ?? ""
-);
+function getDefaultOpenRouterProvider() {
+  return createOpenRouterProvider(process.env.OR_API_KEY);
+}
 
 type GatewayModelSpec = {
   label: string;
@@ -134,7 +142,7 @@ export function resolveRouterModel(
   routerLabel: string,
   usageCounts: UsageCounts,
   maxSame: number,
-  provider = openrouter
+  provider = getDefaultOpenRouterProvider()
 ): GatewayResolution {
   const candidates = (routerCandidates[routerLabel] ?? availableOpenAI).filter(
     (candidate) => availableOpenAI.includes(candidate)
@@ -161,7 +169,7 @@ export function resolveGatewayModel(
   preferredLabel: string | null,
   fallbackLabel: string,
   fallbackModelId: string,
-  provider = openrouter
+  provider = getDefaultOpenRouterProvider()
 ): GatewayResolution {
   const normalizedFallbackModelId = normalizeOpenRouterModelId(fallbackModelId);
   if (!preferredLabel) {
@@ -186,7 +194,7 @@ export function resolveGatewayModel(
       model: provider(normalizedFallbackModelId),
       resolvedLabel: fallbackLabel,
       requestedLabel: preferredLabel,
-      fallbackNote: `Requested model ${preferredLabel} is not available yet. Routed to ${fallbackLabel}.`,
+      fallbackNote: `Requested model ${preferredLabel} is disabled in the gateway config. Routed to ${fallbackLabel}.`,
     };
   }
 
