@@ -19,6 +19,7 @@ import type {
   SolveOutput,
   SuggestionTask,
   TaskSuggestionModel,
+  ToolOverrides,
   TranscriptItem,
 } from "./types";
 
@@ -26,6 +27,7 @@ const DEFAULT_MULTI_MODELS = ["Nexus-Core", "Nexus-Math", "Nexus-Write"];
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_CONTEXT_CHARS = 6000;
 const MODEL_PHASE_PROGRESS_MAX = 80;
+const MIN_AGGREGATION_PHASE_MS = 1200;
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 1600;
 const TASK_SUGGESTION_SEEDS: Record<SuggestionTask, string[]> = {
@@ -43,6 +45,14 @@ const TASK_SUGGESTION_KEYWORDS: Record<SuggestionTask, RegExp> = {
     /(analysis|reason|research|math|physics|stats|quant|logic|evaluate|problem)/i,
   general: /(general|homework|q&a|mixed|core)/i,
 };
+
+async function ensureMinimumAggregationPhase(startedAt: number) {
+  const elapsed = Date.now() - startedAt;
+  const remaining = MIN_AGGREGATION_PHASE_MS - elapsed;
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
 
 interface ChatContainerProps {
   chatId: string;
@@ -162,7 +172,9 @@ export default function Chat({
         }
 
         const tools =
-          toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[messageIndex];
+          toolOverrides?.[msg.id] ??
+          toolOverridesByIndex?.[messageIndex] ??
+          msg.tools;
         const solveQuestions: SolveOutput[] = Array.isArray(
           tools?.solveQuestions
         )
@@ -593,11 +605,12 @@ export default function Chat({
         ).length;
 
         if (successful.length > 0) {
+          const aggregationStartedAt = Date.now();
           updateRun(runId, (prevRun) => ({
             ...prevRun,
             progressPhase: "aggregating",
             progressPercent: Math.max(prevRun.progressPercent ?? 0, 85),
-            aggregationStartedAt: Date.now(),
+            aggregationStartedAt,
           }));
           try {
             const aggregate = await runAggregator({
@@ -611,6 +624,12 @@ export default function Chat({
               maxTokens: plan.maxTokens,
               attachments: plan.attachments,
             });
+            await ensureMinimumAggregationPhase(aggregationStartedAt);
+            const latestRun = runsRef.current.find((r) => r.id === runId);
+            if (!latestRun || latestRun.status === "cancelled") {
+              runControllersRef.current.delete(runId);
+              return;
+            }
 
             updateRun(runId, (prevRun) => ({
               ...prevRun,
@@ -623,6 +642,12 @@ export default function Chat({
               timings: { ...prevRun.timings, endAt: Date.now() },
             }));
           } catch {
+            await ensureMinimumAggregationPhase(aggregationStartedAt);
+            const latestRun = runsRef.current.find((r) => r.id === runId);
+            if (!latestRun || latestRun.status === "cancelled") {
+              runControllersRef.current.delete(runId);
+              return;
+            }
             updateRun(runId, (prevRun) => ({
               ...prevRun,
               status: "error",
@@ -925,11 +950,12 @@ export default function Chat({
         .filter((result) => result?.status === "cancelled").length;
 
       if (successful.length > 0) {
+        const aggregationStartedAt = Date.now();
         updateRun(runId, (prevRun) => ({
           ...prevRun,
           progressPhase: "aggregating",
           progressPercent: Math.max(prevRun.progressPercent ?? 0, 85),
-          aggregationStartedAt: Date.now(),
+          aggregationStartedAt,
           isRetrying: true,
         }));
         try {
@@ -944,6 +970,12 @@ export default function Chat({
             maxTokens: runMaxTokens,
             attachments: runAttachments,
           });
+          await ensureMinimumAggregationPhase(aggregationStartedAt);
+          const latestRun = runsRef.current.find((item) => item.id === runId);
+          if (!latestRun || latestRun.status === "cancelled") {
+            runControllersRef.current.delete(runId);
+            return;
+          }
 
           updateRun(runId, (prevRun) => ({
             ...prevRun,
@@ -956,6 +988,12 @@ export default function Chat({
             timings: { ...prevRun.timings, endAt: Date.now() },
           }));
         } catch {
+          await ensureMinimumAggregationPhase(aggregationStartedAt);
+          const latestRun = runsRef.current.find((item) => item.id === runId);
+          if (!latestRun || latestRun.status === "cancelled") {
+            runControllersRef.current.delete(runId);
+            return;
+          }
           updateRun(runId, (prevRun) => ({
             ...prevRun,
             status: "error",
@@ -1027,6 +1065,7 @@ export default function Chat({
           question,
           answer,
           answerModel: seed.answerModel,
+          tools: seed.tools,
         });
         return;
       }
@@ -1040,6 +1079,7 @@ export default function Chat({
         id: crypto.randomUUID(),
         role: "assistant",
         content: answer,
+        tools: seed.tools,
       };
       setRuns([]);
       setTimeline([
@@ -1061,12 +1101,34 @@ export default function Chat({
       const run = runsRef.current.find((item) => item.id === runId);
       if (!run) return;
       const question = run.queryText.trim();
-      const answer = run.resultsByModel[modelId]?.text?.trim() ?? "";
+      const result = run.resultsByModel[modelId];
+      const answer = result?.text?.trim() ?? "";
       if (!question || !answer) return;
+      const resolvedModelId = result?.usedModel ?? modelId;
+      const answerModel =
+        modelNameMap.get(resolvedModelId) ??
+        modelNameMap.get(modelId) ??
+        resolvedModelId;
+      const tools: ToolOverrides = {
+        solveQuestions: [
+          {
+            steps: result?.steps ?? [],
+            final: answer,
+            model: answerModel,
+            confidence: result?.confidence,
+            citations: result?.citations ?? [],
+            durationMs: result?.latencyMs,
+            selectionReason: result?.selectionReason,
+            gatewayNote: result?.gatewayNote,
+            kind: "solve",
+          },
+        ],
+      };
       branchWithSeed({
         question,
         answer,
-        answerModel: modelNameMap.get(modelId) ?? modelId,
+        answerModel,
+        tools,
       });
     },
     [branchWithSeed, modelNameMap]
@@ -1080,12 +1142,49 @@ export default function Chat({
       const answer = run.aggregated?.text?.trim() ?? "";
       if (!question || !answer) return;
       const aggregatorId = run.executionPlan.aggregatorId;
+      const aggregateModelLabel = aggregatorId
+        ? (modelNameMap.get(aggregatorId) ?? aggregatorId)
+        : "Aggregator";
+      const baseSolves = run.selectedModels
+        .map((modelId): SolveOutput | null => {
+          const result = run.resultsByModel[modelId];
+          const text = result?.text?.trim();
+          if (!result || result.status !== "complete" || !text) return null;
+          const resolvedModelId = result.usedModel ?? modelId;
+          const modelLabel =
+            modelNameMap.get(resolvedModelId) ??
+            modelNameMap.get(modelId) ??
+            resolvedModelId;
+          return {
+            steps: result.steps ?? [],
+            final: text,
+            model: modelLabel,
+            confidence: result.confidence,
+            citations: result.citations ?? [],
+            durationMs: result.latencyMs,
+            selectionReason: result.selectionReason,
+            gatewayNote: result.gatewayNote,
+            kind: "solve",
+          };
+        })
+        .filter((solve): solve is SolveOutput => Boolean(solve));
+      const aggregateSolve: SolveOutput = {
+        steps: [],
+        final: answer,
+        model: aggregateModelLabel,
+        confidence: run.aggregated?.confidence,
+        citations: [],
+        durationMs:
+          typeof run.timings.endAt === "number"
+            ? run.timings.endAt - run.timings.startAt
+            : undefined,
+        kind: "aggregate",
+      };
       branchWithSeed({
         question,
         answer,
-        answerModel: aggregatorId
-          ? (modelNameMap.get(aggregatorId) ?? aggregatorId)
-          : "Aggregator",
+        answerModel: aggregateModelLabel,
+        tools: { solveQuestions: [...baseSolves, aggregateSolve] },
       });
     },
     [branchWithSeed, modelNameMap]
@@ -1099,6 +1198,7 @@ export default function Chat({
     if (timeline.length === 0) return [];
 
     const items: TranscriptItem[] = [];
+    let messageIndex = -1;
     timeline.forEach((entry) => {
       if (entry.kind === "snapshot") {
         items.push(entry.snapshot);
@@ -1106,19 +1206,27 @@ export default function Chat({
       }
 
       if (entry.kind === "message") {
+        messageIndex += 1;
         const message = entry.message as ChatMessage;
         if (message.role !== "user" && message.role !== "assistant") return;
+        const assistantTools =
+          message.role === "assistant"
+            ? message.tools ??
+              toolOverrides?.[message.id] ??
+              toolOverridesByIndex?.[messageIndex]
+            : undefined;
         items.push({
           role: message.role,
           content: message.content ?? "",
           snapshotId: message.snapshotId,
+          tools: assistantTools,
         });
         return;
       }
 
       if (entry.kind === "run") {
         const run = runsById.get(entry.runId);
-        if (!run?.aggregated?.text) return;
+        if (!run || run.status !== "complete" || !run.aggregated?.text) return;
         const aggregatorId = run.executionPlan.aggregatorId;
         const baseSolves: SolveOutput[] = run.selectedModels
           .map((modelId) => {
@@ -1163,7 +1271,14 @@ export default function Chat({
     });
 
     return items;
-  }, [timeline, runsById, aggregatorModel, modelNameMap]);
+  }, [
+    timeline,
+    runsById,
+    aggregatorModel,
+    modelNameMap,
+    toolOverrides,
+    toolOverridesByIndex,
+  ]);
 
   const runEntries = useMemo(
     () => timeline.filter((entry) => entry.kind === "run"),
@@ -1178,8 +1293,21 @@ export default function Chat({
       if (run?.selectedModels?.length)
         return Array.from(new Set(run.selectedModels));
     }
+
+    for (let i = transcript.length - 1; i >= 0; i -= 1) {
+      const item = transcript[i];
+      if (!("role" in item) || item.role !== "assistant") continue;
+      const solveModels = (item.tools?.solveQuestions ?? [])
+        .map((solve) => solve.model?.trim())
+        .filter(
+          (model): model is string =>
+            typeof model === "string" && model.length > 0
+        );
+      if (solveModels.length > 0) return Array.from(new Set(solveModels));
+    }
+
     return effectiveModels;
-  }, [runEntries, runsById, effectiveModels]);
+  }, [runEntries, runsById, transcript, effectiveModels]);
 
   const hasRunEntries = runEntries.length > 0;
 

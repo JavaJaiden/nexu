@@ -53,6 +53,7 @@ export type BranchSeedPayload = {
   question: string;
   answer: string;
   answerModel?: string;
+  tools?: ToolOverrides;
 };
 
 export type ExecutionPlan = {
@@ -113,8 +114,9 @@ export type ChatMessage = Message & {
   optimistic?: boolean;
   clientMessageId?: string;
   runId?: string;
-  createdAt?: string;
+  createdAt?: string | Date;
   attachments?: ChatAttachment[];
+  tools?: ToolOverrides;
 };
 
 export type SaveTranscriptPayload = {

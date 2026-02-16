@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "convex/react";
+import { anyApi } from "convex/server";
 import {
   Button,
   H1,
@@ -51,7 +53,6 @@ import {
   getProviderIcon,
   type ModelCard,
 } from "@/lib/modelCatalog";
-import type { LeaderboardModel } from "@/lib/leaderboard";
 import { useThemeSetting } from "@/lib/themeContext";
 import { loadLabPresets, upsertLabPreset, type LabPreset } from "@/lib/labStore";
 import { fileToAttachment, isPdfFile } from "@/lib/attachments";
@@ -65,25 +66,26 @@ import { useSpeechDictation } from "@/lib/useSpeechDictation";
 type SortKey = "overall" | "coding" | "math" | "reasoning" | "price" | "name" | "speed";
 type SortDir = "asc" | "desc";
 type ChatMode = "compare" | "discover" | null;
+type PriceTier = "free" | "budget" | "standard" | "premium" | "enterprise" | "unknown";
 
 interface DetailedModelData {
   id: string;
   rank: number;
   model: ModelCard;
-  leaderboard?: LeaderboardModel;
+  leaderboard?: ConvexLeaderboardModel;
   scores: {
-    overall: number;
-    coding: number;
-    math: number;
-    reasoning: number;
-    vision: number;
-    multilingual: number;
-    instructionFollowing: number;
+    overall: number | null;
+    coding: number | null;
+    math: number | null;
+    reasoning: number | null;
+    vision: number | null;
+    multilingual: number | null;
+    instructionFollowing: number | null;
   };
   pricing: {
-    input: number;
-    output: number;
-    tier: "free" | "budget" | "standard" | "premium" | "enterprise";
+    input: number | null;
+    output: number | null;
+    tier: PriceTier;
   };
   capabilities: string[];
   benchmarks: {
@@ -117,6 +119,28 @@ interface ChatMessage {
   content: string;
   recommendations?: Array<{ id: string; reason: string; confidence: number }>;
 }
+
+type ConvexLeaderboardModel = {
+  id: string;
+  source: "openrouter";
+  modelId: string;
+  name: string;
+  provider: string;
+  description?: string;
+  contextLength?: number;
+  pricing?: { prompt?: number; completion?: number };
+  capabilities: string[];
+  availability: "available" | "unknown";
+  updatedAt: number;
+};
+
+type ConvexLeaderboardFilters = {
+  providers: string[];
+  capabilities: string[];
+  count: number;
+};
+
+const convexApi = anyApi as any;
 
 const NEXUS_ROUTING_MODEL_IDS = new Set(["Nexus-Core", "Nexus-Math", "Nexus-Code", "Nexus-Write"]);
 
@@ -218,28 +242,14 @@ function getCapabilities(model: ModelCard): string[] {
   return Array.from(tags);
 }
 
-function getCategoryScore(model: ModelCard, category: string): number {
-  const baseScores: Record<string, number> = {
-    coding: model.useCases.some((u) => /code|debug/i.test(u)) ? 92 : 78,
-    math: model.strengths.some((s) => /math|calculus/i.test(s)) ? 89 : 75,
-    reasoning: model.accuracy === "High" ? 88 : 76,
-    overall: model.accuracy === "High" && model.speed === "Fast" ? 90 : 80,
-  };
-  return baseScores[category] ?? 75;
-}
-
-function formatPrice(model: ModelCard): string {
-  const tier = model.costEfficiency.toLowerCase();
-  if (tier === "high") return "$";
-  if (tier === "low") return "$$$";
-  return "$$";
-}
-
-function getPriceTier(model: ModelCard): DetailedModelData["pricing"]["tier"] {
-  const tier = model.costEfficiency.toLowerCase();
-  if (tier === "high") return "budget";
-  if (tier === "low") return "premium";
-  return "standard";
+function getPriceTier(input: number | null, output: number | null): PriceTier {
+  const price = input ?? output;
+  if (price === null || !Number.isFinite(price)) return "unknown";
+  if (price <= 0) return "free";
+  if (price <= 1) return "budget";
+  if (price <= 5) return "standard";
+  if (price <= 20) return "premium";
+  return "enterprise";
 }
 
 function formatLatency(ms: number): string {
@@ -251,6 +261,19 @@ function formatNumber(num: number): string {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
   return num.toString();
+}
+
+function formatPricePerMillion(value?: number): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (value === 0) return "$0";
+  if (value >= 100) return `$${Math.round(value).toLocaleString()}`;
+  if (value >= 10) return `$${value.toFixed(2)}`;
+  return `$${value.toFixed(4)}`;
+}
+
+function formatScore(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `${Math.round(value)}`;
 }
 
 // ============================================================================
@@ -272,11 +295,17 @@ function ModelHubContent() {
     () => allModels.filter((model) => !NEXUS_ROUTING_MODEL_IDS.has(model.id)),
     [allModels]
   );
-  const [leaderboardModels, setLeaderboardModels] = useState<LeaderboardModel[]>([]);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
 
   // UI State
   const [searchQuery, setSearchQuery] = useState("");
+  const [listSearchQuery, setListSearchQuery] = useState("");
+  const [listProviderFilter, setListProviderFilter] = useState("all");
+  const [listCapabilityFilter, setListCapabilityFilter] = useState("all");
+  const [listSort, setListSort] = useState<"name" | "provider" | "price">(
+    "name"
+  );
+  const [listSortDir, setListSortDir] = useState<"asc" | "desc">("asc");
   const [sortKey, setSortKey] = useState<SortKey>("overall");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -326,6 +355,46 @@ function ModelHubContent() {
     [isDark]
   );
 
+  const convexLeaderboardAllModels = useQuery(
+    convexApi.leaderboardModels.list,
+    {
+      limit: 500,
+      sort: "name",
+      sortDir: "asc",
+    }
+  ) as ConvexLeaderboardModel[] | undefined;
+
+  const convexLeaderboardListModels = useQuery(
+    convexApi.leaderboardModels.list,
+    {
+      ...(listProviderFilter !== "all"
+        ? { provider: listProviderFilter }
+        : {}),
+      ...(listCapabilityFilter !== "all"
+        ? { capability: listCapabilityFilter }
+        : {}),
+      ...(listSearchQuery.trim()
+        ? { search: listSearchQuery.trim() }
+        : {}),
+      limit: 250,
+      sort: listSort,
+      sortDir: listSortDir,
+    }
+  ) as ConvexLeaderboardModel[] | undefined;
+
+  const convexLeaderboardFilters = useQuery(
+    convexApi.leaderboardModels.filters,
+    {}
+  ) as ConvexLeaderboardFilters | undefined;
+
+  const leaderboardByModelId = useMemo(() => {
+    const map = new Map<string, ConvexLeaderboardModel>();
+    (convexLeaderboardAllModels ?? []).forEach((model) => {
+      map.set(model.modelId, model);
+    });
+    return map;
+  }, [convexLeaderboardAllModels]);
+
   useEffect(() => {
     let isCancelled = false;
     const loadOpenRouterModels = async () => {
@@ -362,13 +431,10 @@ function ModelHubContent() {
     
     const handler = () => setLabPresets(loadLabPresets());
     window.addEventListener("lab-presets-updated", handler);
-    
-    fetch("/api/leaderboard/models")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data.models)) setLeaderboardModels(data.models);
-      })
-      .catch(() => {});
+
+    return () => {
+      window.removeEventListener("lab-presets-updated", handler);
+    };
   }, []);
 
   // Handle URL params
@@ -500,40 +566,39 @@ function ModelHubContent() {
   // Build detailed model data
   const getDetailedModel = (model: ModelCard, rank: number): DetailedModelData => {
     const enhanced = ENHANCED_MODEL_DATA[model.id] || {};
-    const leaderboard = leaderboardModels.find(
-      (lm) => lm.name.toLowerCase() === model.name.toLowerCase()
-    );
+    const leaderboard = leaderboardByModelId.get(model.id);
+    const promptPrice = leaderboard?.pricing?.prompt ?? null;
+    const completionPrice = leaderboard?.pricing?.completion ?? null;
 
     return {
       id: model.id,
       rank,
       model,
       leaderboard,
-      scores: enhanced.scores || {
-        overall: getCategoryScore(model, "overall"),
-        coding: getCategoryScore(model, "coding"),
-        math: getCategoryScore(model, "math"),
-        reasoning: getCategoryScore(model, "reasoning"),
-        vision: 75,
-        multilingual: 78,
-        instructionFollowing: 82,
+      scores: {
+        overall: null,
+        coding: null,
+        math: null,
+        reasoning: null,
+        vision: null,
+        multilingual: null,
+        instructionFollowing: null,
       },
-      pricing: enhanced.pricing || {
-        input: 0.5,
-        output: 1.5,
-        tier: getPriceTier(model),
+      pricing: {
+        input: promptPrice,
+        output: completionPrice,
+        tier: getPriceTier(promptPrice, completionPrice),
       },
-      capabilities: getCapabilities(model),
-      benchmarks: enhanced.benchmarks || [
-        { name: "MMLU", score: 75, percentile: 80 },
-        { name: "HumanEval", score: 72, percentile: 78 },
-      ],
+      capabilities: leaderboard?.capabilities?.length
+        ? leaderboard.capabilities
+        : getCapabilities(model),
+      benchmarks: Array.isArray(enhanced.benchmarks) ? enhanced.benchmarks : [],
       latency: enhanced.latency || { avg: 350, p50: 300, p95: 600, p99: 900 },
       throughput: enhanced.throughput || { tokensPerSecond: 100, requestsPerMinute: 2000 },
-      contextWindow: enhanced.contextWindow || 128000,
+      contextWindow: leaderboard?.contextLength ?? enhanced.contextWindow ?? 128000,
       trainingCutoff: enhanced.trainingCutoff || "2024-01",
       releaseDate: enhanced.releaseDate || "2024-01-01",
-      description: enhanced.description || model.focus,
+      description: leaderboard?.description || enhanced.description || model.focus,
       strengths: enhanced.strengths || model.strengths,
       weaknesses: enhanced.weaknesses || ["Limited information available"],
       useCases: enhanced.useCases || model.useCases,
@@ -578,21 +643,45 @@ function ModelHubContent() {
 
     // Sort
     rows.sort((a, b) => {
+      const numberOrNull = (value: number | null) =>
+        value !== null && Number.isFinite(value) ? value : null;
+
+      const compareNullableNumber = (left: number | null, right: number | null) => {
+        if (left === null && right === null) return 0;
+        if (left === null) return 1;
+        if (right === null) return -1;
+        return left - right;
+      };
+
       let comparison = 0;
       if (sortKey === "name") {
         comparison = a.model.name.localeCompare(b.model.name);
       } else if (sortKey === "price") {
-        comparison = a.pricing.input - b.pricing.input;
+        const leftPrice = numberOrNull(a.pricing.input ?? a.pricing.output);
+        const rightPrice = numberOrNull(b.pricing.input ?? b.pricing.output);
+        comparison = compareNullableNumber(leftPrice, rightPrice);
       } else if (sortKey === "speed") {
         comparison = a.latency.avg - b.latency.avg;
       } else {
-        comparison = a.scores[sortKey] - b.scores[sortKey];
+        const leftScore = numberOrNull(a.scores[sortKey]);
+        const rightScore = numberOrNull(b.scores[sortKey]);
+        comparison = compareNullableNumber(leftScore, rightScore);
       }
       return sortDir === "desc" ? -comparison : comparison;
     });
 
     return rows.map((row, index) => ({ ...row, rank: index + 1 }));
-  }, [leaderboardEligibleModels, searchQuery, providerFilters, capabilityFilters, priceFilters, sortKey, sortDir, selectedIds]);
+  }, [
+    leaderboardEligibleModels,
+    leaderboardByModelId,
+    searchQuery,
+    providerFilters,
+    capabilityFilters,
+    priceFilters,
+    sortKey,
+    sortDir,
+    selectedIds,
+  ]);
 
   // Get unique values for filters
   const allProviders = useMemo(
@@ -603,7 +692,16 @@ function ModelHubContent() {
     () => Array.from(new Set(leaderboardEligibleModels.flatMap((m) => getCapabilities(m)))).sort(),
     [leaderboardEligibleModels]
   );
-  const priceTiers = ["free", "budget", "standard", "premium", "enterprise"];
+  const priceTiers: PriceTier[] = ["free", "budget", "standard", "premium", "enterprise", "unknown"];
+
+  const convexListRows = convexLeaderboardListModels ?? [];
+  const convexListFilters = convexLeaderboardFilters ?? {
+    providers: [],
+    capabilities: [],
+    count: 0,
+  };
+  const isConvexListLoading =
+    convexLeaderboardListModels === undefined || convexLeaderboardFilters === undefined;
 
   const activeFiltersCount = providerFilters.size + capabilityFilters.size + priceFilters.size;
   const activeModel = panelModelId ? modelRows.find((r) => r.id === panelModelId) : null;
@@ -709,17 +807,19 @@ function ModelHubContent() {
 
   const generateModelRecommendation = (query: string, models: DetailedModelData[]): ChatMessage => {
     const query_lower = query.toLowerCase();
+    const hasScore = (value: number | null): value is number =>
+      value !== null && Number.isFinite(value);
     
     let recommendations: Array<{ id: string; reason: string; confidence: number }> = [];
     
     if (query_lower.includes("code") || query_lower.includes("programming")) {
       recommendations = models
-        .filter((m) => m.scores.coding > 85)
+        .filter((m) => hasScore(m.scores.coding) && m.scores.coding > 85)
         .slice(0, 3)
         .map((m) => ({
           id: m.id,
-          reason: `Strong coding performance (${m.scores.coding}/100) with ${m.capabilities.includes("function-calling") ? "function calling support" : "excellent code generation"}`,
-          confidence: m.scores.coding / 100,
+          reason: `Strong coding performance (${formatScore(m.scores.coding)}/100) with ${m.capabilities.includes("function-calling") ? "function calling support" : "excellent code generation"}`,
+          confidence: (m.scores.coding as number) / 100,
         }));
     } else if (query_lower.includes("cheap") || query_lower.includes("budget")) {
       recommendations = models
@@ -727,7 +827,7 @@ function ModelHubContent() {
         .slice(0, 3)
         .map((m) => ({
           id: m.id,
-          reason: `${m.pricing.tier === "free" ? "Free" : "Budget-friendly"} pricing at $${m.pricing.input}/1M tokens`,
+          reason: `${m.pricing.tier === "free" ? "Free" : "Budget-friendly"} pricing at ${formatPricePerMillion(m.pricing.input ?? m.pricing.output ?? undefined)}/1M tokens`,
           confidence: 0.9,
         }));
     } else if (query_lower.includes("fast") || query_lower.includes("quick")) {
@@ -742,12 +842,13 @@ function ModelHubContent() {
         }));
     } else {
       recommendations = models
-        .sort((a, b) => b.scores.overall - a.scores.overall)
+        .filter((m) => hasScore(m.scores.overall))
+        .sort((a, b) => (b.scores.overall as number) - (a.scores.overall as number))
         .slice(0, 3)
         .map((m) => ({
           id: m.id,
-          reason: `Top overall performance (${m.scores.overall}/100) with ${m.strengths[0]}`,
-          confidence: m.scores.overall / 100,
+          reason: `Top overall performance (${formatScore(m.scores.overall)}/100) with ${m.strengths[0]}`,
+          confidence: (m.scores.overall as number) / 100,
         }));
     }
     
@@ -768,15 +869,16 @@ function ModelHubContent() {
     );
   };
 
-  const getTierColor = (tier: string) => {
-    const colors: Record<string, string> = {
+  const getTierColor = (tier: PriceTier) => {
+    const tierColors: Record<PriceTier, string> = {
       free: "#22C55E",
       budget: "#10B981",
       standard: "#F59E0B",
       premium: "#EF4444",
       enterprise: "#8B5CF6",
+      unknown: colors.textMuted,
     };
-    return colors[tier] || colors.textSecondary;
+    return tierColors[tier];
   };
 
   const cardTransitionStyle = {
@@ -1152,6 +1254,293 @@ function ModelHubContent() {
             <Paragraph color={colors.textMuted} fontSize={15} maxWidth={600}>
               Compare AI models across coding, math, and reasoning benchmarks. Click any model for detailed insights.
             </Paragraph>
+          </YStack>
+
+          <YStack
+            marginBottom="$lg"
+            padding="$md"
+            borderWidth={1}
+            borderColor={colors.border}
+            borderRadius="$lg"
+            backgroundColor={colors.bgTertiary}
+            gap="$md"
+          >
+            <XStack
+              justifyContent="space-between"
+              alignItems="center"
+              flexWrap="wrap"
+              gap="$sm"
+            >
+              <YStack>
+                <Text fontSize={16} fontWeight="700" color={colors.text}>
+                  List View (OpenRouter via Convex)
+                </Text>
+                <Text fontSize={12} color={colors.textMuted}>
+                  Server-ingested model metadata with provider and capability filters.
+                </Text>
+              </YStack>
+              <Text fontSize={12} color={colors.textMuted}>
+                {`${convexListFilters.count} models`}
+              </Text>
+            </XStack>
+
+            <XStack gap="$sm" flexWrap="wrap" alignItems="center">
+              <XStack
+                flex={1}
+                minWidth={220}
+                alignItems="center"
+                gap="$xs"
+                paddingHorizontal="$md"
+                paddingVertical="$sm"
+                backgroundColor={colors.bgSecondary}
+                borderRadius="$md"
+                borderWidth={1}
+                borderColor={colors.border}
+              >
+                <Search size={16} color={colors.textMuted} />
+                <Input
+                  flex={1}
+                  backgroundColor="transparent"
+                  borderWidth={0}
+                  color={colors.text}
+                  placeholder="Search name or provider"
+                  placeholderTextColor={colors.textSecondary}
+                  fontSize={14}
+                  value={listSearchQuery}
+                  onChangeText={setListSearchQuery}
+                />
+              </XStack>
+
+              <YStack
+                minWidth={160}
+                borderWidth={1}
+                borderColor={colors.border}
+                borderRadius="$md"
+                backgroundColor={colors.bgSecondary}
+                paddingHorizontal="$sm"
+              >
+                <select
+                  value={listProviderFilter}
+                  onChange={(event) => setListProviderFilter(event.currentTarget.value)}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: colors.text,
+                    fontSize: 13,
+                    padding: "9px 0",
+                  }}
+                >
+                  <option value="all">All providers</option>
+                  {convexListFilters.providers.map((provider) => (
+                    <option key={provider} value={provider}>
+                      {provider}
+                    </option>
+                  ))}
+                </select>
+              </YStack>
+
+              <YStack
+                minWidth={170}
+                borderWidth={1}
+                borderColor={colors.border}
+                borderRadius="$md"
+                backgroundColor={colors.bgSecondary}
+                paddingHorizontal="$sm"
+              >
+                <select
+                  value={listCapabilityFilter}
+                  onChange={(event) => setListCapabilityFilter(event.currentTarget.value)}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: colors.text,
+                    fontSize: 13,
+                    padding: "9px 0",
+                  }}
+                >
+                  <option value="all">All capabilities</option>
+                  {convexListFilters.capabilities.map((capability) => (
+                    <option key={capability} value={capability}>
+                      {capability}
+                    </option>
+                  ))}
+                </select>
+              </YStack>
+
+              <YStack
+                minWidth={130}
+                borderWidth={1}
+                borderColor={colors.border}
+                borderRadius="$md"
+                backgroundColor={colors.bgSecondary}
+                paddingHorizontal="$sm"
+              >
+                <select
+                  value={listSort}
+                  onChange={(event) =>
+                    setListSort(
+                      event.currentTarget.value as "name" | "provider" | "price"
+                    )
+                  }
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    color: colors.text,
+                    fontSize: 13,
+                    padding: "9px 0",
+                  }}
+                >
+                  <option value="name">Sort: Name</option>
+                  <option value="provider">Sort: Provider</option>
+                  <option value="price">Sort: Price</option>
+                </select>
+              </YStack>
+
+              <Button
+                size="$3"
+                backgroundColor={colors.bgSecondary}
+                borderWidth={1}
+                borderColor={colors.border}
+                color={colors.text}
+                borderRadius="$md"
+                onPress={() =>
+                  setListSortDir((current) => (current === "asc" ? "desc" : "asc"))
+                }
+              >
+                {listSortDir === "asc" ? "Asc" : "Desc"}
+              </Button>
+
+              <Button
+                size="$3"
+                backgroundColor="transparent"
+                borderWidth={1}
+                borderColor={colors.border}
+                color={colors.textMuted}
+                borderRadius="$md"
+                onPress={() => {
+                  setListSearchQuery("");
+                  setListProviderFilter("all");
+                  setListCapabilityFilter("all");
+                  setListSort("name");
+                  setListSortDir("asc");
+                }}
+              >
+                Reset
+              </Button>
+            </XStack>
+
+            <YStack
+              borderWidth={1}
+              borderColor={colors.border}
+              borderRadius="$md"
+              overflow="hidden"
+              backgroundColor={colors.bgSecondary}
+            >
+              <XStack
+                padding="$sm"
+                borderBottomWidth={1}
+                borderColor={colors.border}
+                backgroundColor={colors.bg}
+                gap="$sm"
+                alignItems="center"
+              >
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={2}>
+                  Model
+                </Text>
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={1}>
+                  Prompt Price
+                </Text>
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={1}>
+                  Completion Price
+                </Text>
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={1}>
+                  Context
+                </Text>
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={1}>
+                  Scores
+                </Text>
+                <Text fontSize={12} fontWeight="700" color={colors.textMuted} flex={2}>
+                  Capabilities
+                </Text>
+              </XStack>
+
+              <YStack maxHeight={420} overflow="scroll">
+                {isConvexListLoading ? (
+                  <YStack padding="$md">
+                    <Text fontSize={13} color={colors.textMuted}>
+                      Loading leaderboard models...
+                    </Text>
+                  </YStack>
+                ) : convexListRows.length === 0 ? (
+                  <YStack padding="$md">
+                    <Text fontSize={13} color={colors.textMuted}>
+                      No models matched the current filters.
+                    </Text>
+                  </YStack>
+                ) : (
+                  convexListRows.map((row) => (
+                    <XStack
+                      key={row.id}
+                      padding="$sm"
+                      borderBottomWidth={1}
+                      borderColor={colors.border}
+                      gap="$sm"
+                      alignItems="center"
+                    >
+                      <YStack flex={2}>
+                        <Text fontSize={14} fontWeight="600" color={colors.text}>
+                          {row.name}
+                        </Text>
+                        <Text fontSize={12} color={colors.textMuted}>
+                          {`${getProviderIcon(row.provider)} ${row.provider}`}
+                        </Text>
+                      </YStack>
+                      <Text fontSize={13} color={colors.text} flex={1}>
+                        {formatPricePerMillion(row.pricing?.prompt)}
+                      </Text>
+                      <Text fontSize={13} color={colors.text} flex={1}>
+                        {formatPricePerMillion(row.pricing?.completion)}
+                      </Text>
+                      <Text fontSize={13} color={colors.text} flex={1}>
+                        {typeof row.contextLength === "number"
+                          ? `${formatNumber(row.contextLength)}`
+                          : "—"}
+                      </Text>
+                      <Text fontSize={13} color={colors.textMuted} flex={1}>
+                        —
+                      </Text>
+                      <XStack gap="$xs" flex={2} flexWrap="wrap">
+                        {row.capabilities.length > 0 ? (
+                          row.capabilities.map((capability) => (
+                            <Text
+                              key={`${row.id}-${capability}`}
+                              fontSize={11}
+                              color={colors.accent}
+                              backgroundColor={colors.accentBg}
+                              borderRadius="$full"
+                              paddingHorizontal="$sm"
+                              paddingVertical={4}
+                            >
+                              {capability}
+                            </Text>
+                          ))
+                        ) : (
+                          <Text fontSize={12} color={colors.textMuted}>
+                            —
+                          </Text>
+                        )}
+                      </XStack>
+                    </XStack>
+                  ))
+                )}
+              </YStack>
+            </YStack>
           </YStack>
 
           {/* Selected Models Bar */}
@@ -1609,30 +1998,34 @@ function ModelHubContent() {
                   {/* Scores */}
                   <XStack flex={1} justifyContent="flex-end" gap="$sm" alignItems="center">
                     {[
-                      { score: row.scores.overall, color: row.scores.overall >= 90 ? colors.accent : colors.textMuted },
-                      { score: row.scores.coding, color: row.scores.coding >= 90 ? colors.accent : colors.textMuted },
-                      { score: row.scores.math, color: row.scores.math >= 90 ? colors.accent : colors.textMuted },
-                      { score: row.scores.reasoning, color: row.scores.reasoning >= 90 ? colors.accent : colors.textMuted },
-                    ].map(({ score, color }, idx) => (
-                      <YStack key={idx} minWidth={70} alignItems="center">
-                        <Text fontSize={15} fontWeight="700" color={color}>
-                          {score}
-                        </Text>
-                        <YStack
-                          height={4}
-                          width={40}
-                          backgroundColor={colors.border}
-                          borderRadius="$full"
-                          overflow="hidden"
-                        >
+                      row.scores.overall,
+                      row.scores.coding,
+                      row.scores.math,
+                      row.scores.reasoning,
+                    ].map((score, idx) => {
+                      const hasScore = score !== null && Number.isFinite(score);
+                      const scoreColor = hasScore && score >= 90 ? colors.accent : colors.textMuted;
+                      return (
+                        <YStack key={idx} minWidth={70} alignItems="center">
+                          <Text fontSize={15} fontWeight="700" color={scoreColor}>
+                            {formatScore(score)}
+                          </Text>
                           <YStack
-                            height="100%"
-                            width={`${score}%`}
-                            backgroundColor={color}
-                          />
+                            height={4}
+                            width={40}
+                            backgroundColor={colors.border}
+                            borderRadius="$full"
+                            overflow="hidden"
+                          >
+                            <YStack
+                              height="100%"
+                              width={hasScore ? `${score}%` : "0%"}
+                              backgroundColor={scoreColor}
+                            />
+                          </YStack>
                         </YStack>
-                      </YStack>
-                    ))}
+                      );
+                    })}
 
                     <YStack minWidth={60} alignItems="center">
                       <Text 
@@ -1640,7 +2033,7 @@ function ModelHubContent() {
                         color={getTierColor(row.pricing.tier)}
                         fontWeight="500"
                       >
-                        {`$${row.pricing.input}`}
+                        {formatPricePerMillion(row.pricing.input ?? undefined)}
                       </Text>
                     </YStack>
                   </XStack>
@@ -1682,8 +2075,7 @@ function ModelHubContent() {
                 </Text>
               </XStack>
               <Text fontSize={12} color={colors.textSecondary} lineHeight={18}>
-                Scores are benchmark ratings from 0-100 based on standardized tests. 
-                Higher scores indicate better performance. Click any model for detailed insights.
+                Benchmark scores are only shown when trusted benchmark data is available. Missing values are shown as "—" instead of synthetic estimates.
               </Text>
             </YStack>
 
@@ -1907,29 +2299,39 @@ function ModelHubContent() {
                   </XStack>
                   
                   <XStack gap="$lg" flexWrap="wrap">
-                    {Object.entries(activeModel.scores).map(([key, score]) => (
-                      <YStack key={key} alignItems="center" gap="$xs" minWidth={80}>
-                        <Text fontSize={28} fontWeight="800" color={score >= 90 ? colors.accent : score >= 80 ? colors.gold : colors.textMuted}>
-                          {score}
-                        </Text>
-                        <Text fontSize={11} color={colors.textSecondary} textTransform="capitalize">
-                          {key.replace(/([A-Z])/g, " $1").trim()}
-                        </Text>
-                        <YStack
-                          height={6}
-                          width={60}
-                          backgroundColor={colors.border}
-                          borderRadius="$full"
-                          overflow="hidden"
-                        >
+                    {Object.entries(activeModel.scores).map(([key, score]) => {
+                      const hasScore = score !== null && Number.isFinite(score);
+                      const scoreColor = hasScore
+                        ? score >= 90
+                          ? colors.accent
+                          : score >= 80
+                            ? colors.gold
+                            : colors.textMuted
+                        : colors.textMuted;
+                      return (
+                        <YStack key={key} alignItems="center" gap="$xs" minWidth={80}>
+                          <Text fontSize={28} fontWeight="800" color={scoreColor}>
+                            {formatScore(score)}
+                          </Text>
+                          <Text fontSize={11} color={colors.textSecondary} textTransform="capitalize">
+                            {key.replace(/([A-Z])/g, " $1").trim()}
+                          </Text>
                           <YStack
-                            height="100%"
-                            width={`${score}%`}
-                            backgroundColor={score >= 90 ? colors.accent : score >= 80 ? colors.gold : colors.textSecondary}
-                          />
+                            height={6}
+                            width={60}
+                            backgroundColor={colors.border}
+                            borderRadius="$full"
+                            overflow="hidden"
+                          >
+                            <YStack
+                              height="100%"
+                              width={hasScore ? `${score}%` : "0%"}
+                              backgroundColor={scoreColor}
+                            />
+                          </YStack>
                         </YStack>
-                      </YStack>
-                    ))}
+                      );
+                    })}
                   </XStack>
                 </YStack>
 
@@ -1958,14 +2360,14 @@ function ModelHubContent() {
                     <YStack flex={1} backgroundColor={colors.bgTertiary} borderRadius="$md" padding="$md" borderWidth={1} borderColor={colors.border}>
                       <Text fontSize={12} color={colors.textSecondary}>Input</Text>
                       <Text fontSize={20} fontWeight="700" color={colors.text}>
-                        {`$${activeModel.pricing.input}`}
+                        {formatPricePerMillion(activeModel.pricing.input ?? undefined)}
                       </Text>
                       <Text fontSize={11} color={colors.textSecondary}>per 1M tokens</Text>
                     </YStack>
                     <YStack flex={1} backgroundColor={colors.bgTertiary} borderRadius="$md" padding="$md" borderWidth={1} borderColor={colors.border}>
                       <Text fontSize={12} color={colors.textSecondary}>Output</Text>
                       <Text fontSize={20} fontWeight="700" color={colors.text}>
-                        {`$${activeModel.pricing.output}`}
+                        {formatPricePerMillion(activeModel.pricing.output ?? undefined)}
                       </Text>
                       <Text fontSize={11} color={colors.textSecondary}>per 1M tokens</Text>
                     </YStack>

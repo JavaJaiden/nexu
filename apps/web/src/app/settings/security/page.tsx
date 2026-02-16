@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type SecuritySession = {
   id: string;
@@ -44,13 +45,13 @@ export default function SettingsSecurityPage() {
     const load = async () => {
       try {
         const res = await fetch("/api/settings/security", { cache: "no-store" });
-        const data = (await res.json()) as SecurityData & { error?: string };
-        if (!res.ok) throw new Error(data.error || "Failed to load security settings.");
+        const data = await readResponseJson<SecurityData & { error?: string }>(res);
+        if (!res.ok) throw new Error(readResponseError(res, data, "Failed to load security settings."));
         if (cancelled) return;
         setSecurity({
-          mfaEnabled: Boolean(data.mfaEnabled),
-          sessions: Array.isArray(data.sessions) ? data.sessions : [],
-          connections: Array.isArray(data.connections) ? data.connections : [],
+          mfaEnabled: Boolean(data?.mfaEnabled),
+          sessions: Array.isArray(data?.sessions) ? data.sessions : [],
+          connections: Array.isArray(data?.connections) ? data.connections : [],
         });
       } catch (error) {
         if (cancelled) return;
@@ -88,9 +89,9 @@ export default function SettingsSecurityPage() {
           newPassword,
         }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Failed to update password.");
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !data?.ok) {
+        throw new Error(readResponseError(res, data, "Failed to update password."));
       }
       setCurrentPassword("");
       setNewPassword("");
@@ -117,9 +118,9 @@ export default function SettingsSecurityPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mfaEnabled: next }),
       });
-      const data = (await res.json()) as { mfaEnabled?: boolean; error?: string };
-      if (!res.ok) throw new Error(data.error || "Failed to update MFA.");
-      setSecurity((prev) => (prev ? { ...prev, mfaEnabled: Boolean(data.mfaEnabled) } : prev));
+      const data = await readResponseJson<{ mfaEnabled?: boolean; error?: string }>(res);
+      if (!res.ok) throw new Error(readResponseError(res, data, "Failed to update MFA."));
+      setSecurity((prev) => (prev ? { ...prev, mfaEnabled: Boolean(data?.mfaEnabled) } : prev));
       setNotice({ kind: "success", text: `MFA ${next ? "enabled" : "disabled"}.` });
     } catch (error) {
       setNotice({
@@ -137,9 +138,9 @@ export default function SettingsSecurityPage() {
       const res = await fetch(`/api/settings/security/sessions/${sessionId}`, {
         method: "DELETE",
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Failed to revoke session.");
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !data?.ok) {
+        throw new Error(readResponseError(res, data, "Failed to revoke session."));
       }
       setSecurity((prev) =>
         prev ? { ...prev, sessions: prev.sessions.filter((entry) => entry.id !== sessionId) } : prev

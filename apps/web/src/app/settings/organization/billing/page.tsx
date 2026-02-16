@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type OrganizationMembership = {
   role: "owner" | "admin" | "member";
@@ -89,8 +90,8 @@ export default function OrganizationBillingPage() {
       const res = await fetch(`/api/settings/organization/billing${query}`, {
         cache: "no-store",
       });
-      const payload = (await res.json()) as BillingResponse & { error?: string };
-      if (!res.ok) throw new Error(payload.error || "Failed to load billing settings.");
+      const payload = await readResponseJson<BillingResponse & { error?: string }>(res);
+      if (!res.ok || !payload) throw new Error(readResponseError(res, payload, "Failed to load billing settings."));
       hydrate(payload);
     },
     [hydrate]
@@ -136,9 +137,9 @@ export default function OrganizationBillingPage() {
           monthlyMaxCents: toCents(monthlyMax),
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to save billing settings.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to save billing settings."));
       }
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Billing settings updated." });
@@ -165,8 +166,8 @@ export default function OrganizationBillingPage() {
           action: "stripe_portal",
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; url?: string; error?: string };
-      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to open billing portal.");
+      const payload = await readResponseJson<{ ok?: boolean; url?: string; error?: string }>(res);
+      if (!res.ok || !payload?.ok) throw new Error(readResponseError(res, payload, "Failed to open billing portal."));
       if (payload.url) {
         window.location.href = payload.url;
       } else {
@@ -200,8 +201,8 @@ export default function OrganizationBillingPage() {
           priceId: priceId.trim(),
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; url?: string; error?: string };
-      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to start checkout.");
+      const payload = await readResponseJson<{ ok?: boolean; url?: string; error?: string }>(res);
+      if (!res.ok || !payload?.ok) throw new Error(readResponseError(res, payload, "Failed to start checkout."));
       if (payload.url) {
         window.location.href = payload.url;
       } else {
@@ -236,8 +237,8 @@ export default function OrganizationBillingPage() {
           description: "Manual credit purchase",
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to add credits.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) throw new Error(readResponseError(res, payload, "Failed to add credits."));
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Credits added." });
     } catch (error) {

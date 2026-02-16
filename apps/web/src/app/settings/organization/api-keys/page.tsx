@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type OrganizationMembership = {
   role: "owner" | "admin" | "member";
@@ -107,14 +108,14 @@ export default function OrganizationApiKeysPage() {
       fetch(`/api/settings/organization/billing${query}`, { cache: "no-store" }),
     ]);
 
-    const keysPayload = (await keysRes.json()) as ApiKeysResponse & { error?: string };
-    if (!keysRes.ok) {
-      throw new Error(keysPayload.error || "Failed to load API keys.");
+    const keysPayload = await readResponseJson<ApiKeysResponse & { error?: string }>(keysRes);
+    if (!keysRes.ok || !keysPayload) {
+      throw new Error(readResponseError(keysRes, keysPayload, "Failed to load API keys."));
     }
 
-    const billingPayload = (await billingRes.json()) as BillingResponse & { error?: string };
-    if (!billingRes.ok) {
-      throw new Error(billingPayload.error || "Failed to load auto-reload settings.");
+    const billingPayload = await readResponseJson<BillingResponse & { error?: string }>(billingRes);
+    if (!billingRes.ok || !billingPayload) {
+      throw new Error(readResponseError(billingRes, billingPayload, "Failed to load auto-reload settings."));
     }
 
     setData(keysPayload);
@@ -164,14 +165,14 @@ export default function OrganizationApiKeysPage() {
           name: newKeyName.trim(),
         }),
       });
-      const payload = (await res.json()) as {
+      const payload = await readResponseJson<{
         ok?: boolean;
         key?: string;
         record?: ApiKeyRecord;
         error?: string;
-      };
-      if (!res.ok || !payload.ok || !payload.record || !payload.key) {
-        throw new Error(payload.error || "Failed to create API key.");
+      }>(res);
+      if (!res.ok || !payload?.ok || !payload.record || !payload.key) {
+        throw new Error(readResponseError(res, payload, "Failed to create API key."));
       }
       setData((prev) =>
         prev
@@ -205,9 +206,9 @@ export default function OrganizationApiKeysPage() {
         )}?organizationId=${encodeURIComponent(data.organization.id)}`,
         { method: "DELETE" }
       );
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to revoke API key.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to revoke API key."));
       }
       setData((prev) =>
         prev
@@ -244,9 +245,9 @@ export default function OrganizationApiKeysPage() {
           monthlyMaxCents: toCents(monthlyMax),
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to save auto-reload settings.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to save auto-reload settings."));
       }
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Auto-reload settings updated." });

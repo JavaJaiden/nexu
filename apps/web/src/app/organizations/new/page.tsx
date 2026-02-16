@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
 import Header from "@/components/Header";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 function normalizeInviteEmails(value: string) {
   return Array.from(
@@ -45,14 +46,14 @@ export default function NewOrganizationPage() {
           invites,
         }),
       });
-      const payload = (await res.json()) as {
+      const payload = await readResponseJson<{
         ok?: boolean;
         organization?: { id: string; name: string };
         invites?: { attempted: number; invited: string[]; failed: Array<{ email: string; reason: string }> };
         error?: string;
-      };
-      if (!res.ok || !payload.ok || !payload.organization) {
-        throw new Error(payload.error || "Failed to create organization.");
+      }>(res);
+      if (!res.ok || !payload?.ok || !payload.organization) {
+        throw new Error(readResponseError(res, payload, "Failed to create organization."));
       }
 
       const failedCount = payload.invites?.failed?.length ?? 0;

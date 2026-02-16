@@ -147,6 +147,8 @@ export type AggregatedResult = {
   confidence?: number;
 };
 
+const AGGREGATOR_TIMEOUT_MS = 20000;
+
 function extractShortAnswer(text: string) {
   const trimmed = text.trim();
   if (trimmed.length <= 24) return trimmed;
@@ -200,10 +202,16 @@ export async function runAggregator(params: {
   maxTokens?: number;
   attachments?: Array<{ name: string; type: string; data: string }>;
 }): Promise<AggregatedResult> {
+  const controller = new AbortController();
+  const timeoutId: ReturnType<typeof setTimeout> = setTimeout(() => {
+    controller.abort();
+  }, AGGREGATOR_TIMEOUT_MS);
+
   try {
     const response = await fetch("/api/consensus", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         question: params.question,
         answers: params.results.map((result) => ({
@@ -225,5 +233,7 @@ export async function runAggregator(params: {
     };
   } catch {
     return aggregateFallback(params.question, params.results);
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

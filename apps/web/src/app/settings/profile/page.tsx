@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar, Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
 import { Camera, Mail } from "lucide-react";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type ProfileUser = {
   id: string;
@@ -35,12 +36,12 @@ export default function SettingsProfilePage() {
     const load = async () => {
       try {
         const res = await fetch("/api/settings/profile", { cache: "no-store" });
-        const data = (await res.json()) as { user?: ProfileUser; error?: string };
+        const data = await readResponseJson<{ user?: ProfileUser; error?: string }>(res);
         if (!res.ok) {
-          throw new Error(data.error || "Failed to load profile.");
+          throw new Error(readResponseError(res, data, "Failed to load profile."));
         }
         if (cancelled) return;
-        const next = data.user ?? null;
+        const next = data?.user ?? null;
         setUser(next);
         setName(next?.name ?? "");
         setPhone(next?.phone ?? "");
@@ -105,11 +106,11 @@ export default function SettingsProfilePage() {
           avatarUrl: avatarUrl || undefined,
         }),
       });
-      const data = (await res.json()) as { user?: ProfileUser; error?: string };
+      const data = await readResponseJson<{ user?: ProfileUser; error?: string }>(res);
       if (!res.ok) {
-        throw new Error(data.error || "Failed to save profile.");
+        throw new Error(readResponseError(res, data, "Failed to save profile."));
       }
-      const nextUser = data.user ?? null;
+      const nextUser = data?.user ?? null;
       setUser(nextUser);
       setName(nextUser?.name ?? name.trim());
       setPhone(nextUser?.phone ?? phone.trim());
@@ -141,11 +142,11 @@ export default function SettingsProfilePage() {
           password: passwordConfirm,
         }),
       });
-      const data = (await res.json()) as { user?: ProfileUser; error?: string };
+      const data = await readResponseJson<{ user?: ProfileUser; error?: string }>(res);
       if (!res.ok) {
-        throw new Error(data.error || "Failed to change email.");
+        throw new Error(readResponseError(res, data, "Failed to change email."));
       }
-      if (data.user) {
+      if (data?.user) {
         setUser(data.user);
         setNewEmail(data.user.email);
       }
@@ -177,9 +178,9 @@ export default function SettingsProfilePage() {
           confirmation: deleteConfirmation,
         }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Failed to delete profile.");
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !data?.ok) {
+        throw new Error(readResponseError(res, data, "Failed to delete profile."));
       }
       setNotice({ kind: "success", text: "Profile deleted. Redirecting..." });
       setTimeout(() => {

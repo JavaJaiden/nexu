@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type OrganizationMembership = {
   role: "owner" | "admin" | "member";
@@ -72,8 +73,10 @@ export default function OrganizationGeneralPage() {
       const res = await fetch(`/api/settings/organization/general${query}`, {
         cache: "no-store",
       });
-      const payload = (await res.json()) as GeneralResponse & { error?: string };
-      if (!res.ok) throw new Error(payload.error || "Failed to load organization settings.");
+      const payload = await readResponseJson<GeneralResponse & { error?: string }>(res);
+      if (!res.ok || !payload) {
+        throw new Error(readResponseError(res, payload, "Failed to load organization settings."));
+      }
       hydrateForm(payload);
     },
     [hydrateForm]
@@ -124,8 +127,8 @@ export default function OrganizationGeneralPage() {
           billingAddress,
         }),
       });
-      const payload = (await res.json()) as { organization?: OrganizationRecord; error?: string };
-      if (!res.ok) throw new Error(payload.error || "Failed to save organization settings.");
+      const payload = await readResponseJson<{ organization?: OrganizationRecord; error?: string }>(res);
+      if (!res.ok) throw new Error(readResponseError(res, payload, "Failed to save organization settings."));
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Organization settings updated." });
     } catch (error) {
@@ -150,9 +153,9 @@ export default function OrganizationGeneralPage() {
         `/api/settings/organization/general?organizationId=${encodeURIComponent(data.organization.id)}`,
         { method: "DELETE" }
       );
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to delete organization.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to delete organization."));
       }
       await load();
       setNotice({ kind: "success", text: "Organization deleted." });

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button, H1, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type NotificationSettings = {
   contacts: boolean;
@@ -36,13 +37,13 @@ export default function SettingsNotificationsPage() {
     const load = async () => {
       try {
         const res = await fetch("/api/settings/notifications", { cache: "no-store" });
-        const data = (await res.json()) as {
+        const data = await readResponseJson<{
           settings?: Partial<NotificationSettings>;
           error?: string;
-        };
-        if (!res.ok) throw new Error(data.error || "Failed to load notification settings.");
+        }>(res);
+        if (!res.ok) throw new Error(readResponseError(res, data, "Failed to load notification settings."));
         if (cancelled) return;
-        setSettings({ ...DEFAULT_SETTINGS, ...(data.settings ?? {}) });
+        setSettings({ ...DEFAULT_SETTINGS, ...(data?.settings ?? {}) });
       } catch (error) {
         if (cancelled) return;
         setNotice({
@@ -68,9 +69,9 @@ export default function SettingsNotificationsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
       });
-      const data = (await res.json()) as { settings?: NotificationSettings; error?: string };
-      if (!res.ok) throw new Error(data.error || "Failed to save notification settings.");
-      if (data.settings) setSettings(data.settings);
+      const data = await readResponseJson<{ settings?: NotificationSettings; error?: string }>(res);
+      if (!res.ok) throw new Error(readResponseError(res, data, "Failed to save notification settings."));
+      if (data?.settings) setSettings(data.settings);
       setNotice({ kind: "success", text: "Notification preferences updated." });
     } catch (error) {
       setNotice({

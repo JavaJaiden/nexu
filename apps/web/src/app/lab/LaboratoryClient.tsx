@@ -54,6 +54,7 @@ import {
 } from "@/lib/modelCatalog";
 import {
   loadLabPresets,
+  upsertLabPreset,
   removeLabPreset,
   type LabPreset,
 } from "@/lib/labStore";
@@ -152,6 +153,13 @@ const complexityLabels: Record<ComplexityLevel, string> = {
   enterprise: "Enterprise",
 };
 
+const NEXUS_ROUTING_MODEL_IDS = new Set([
+  "Nexus-Core",
+  "Nexus-Math",
+  "Nexus-Code",
+  "Nexus-Write",
+]);
+
 // Convert presets to assets
 function presetsToAssets(presets: LabPreset[]): Asset[] {
   return presets.map((preset) => ({
@@ -160,8 +168,14 @@ function presetsToAssets(presets: LabPreset[]): Asset[] {
     type: "model",
     scope: "private",
     complexity: "simple",
-    description: `${preset.models.length} models for ${preset.subject || "general"} tasks`,
-    tags: [preset.subject || "General", "preset"],
+    description: `${preset.models.length} model${preset.models.length === 1 ? "" : "s"} • ${(preset.subject ?? "General").toLowerCase()} pair`,
+    tags: Array.from(
+      new Set([
+        ...(Array.isArray(preset.tags) ? preset.tags : []),
+        preset.subject || "General",
+        "pair",
+      ])
+    ),
     createdAt: preset.createdAt,
     updatedAt: preset.createdAt,
     author: "You",
@@ -195,7 +209,7 @@ function parseTags(input: string) {
   return Array.from(
     new Set(
       input
-        .split(",")
+        .split(/[,\n;]+/)
         .map((entry) => entry.trim())
         .filter(Boolean)
     )
@@ -304,6 +318,12 @@ export default function LaboratoryPage() {
   const [sortBy, setSortBy] = useState<"recent" | "usage" | "rating">("recent");
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
+  const [showPairBuilder, setShowPairBuilder] = useState(false);
+  const [pairName, setPairName] = useState("");
+  const [pairTagsInput, setPairTagsInput] = useState("");
+  const [pairModelSearch, setPairModelSearch] = useState("");
+  const [selectedPairModelIds, setSelectedPairModelIds] = useState<string[]>([]);
+  const [pairNotice, setPairNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const [modelCatalog, setModelCatalog] = useState<ModelCard[]>(() =>
     buildModelHubCardsFromIds([])
@@ -312,6 +332,25 @@ export default function LaboratoryPage() {
     () => new Map(modelCatalog.map((m) => [m.id, m])),
     [modelCatalog]
   );
+  const pairableModels = useMemo(
+    () =>
+      modelCatalog
+        .filter((model) => !NEXUS_ROUTING_MODEL_IDS.has(model.id))
+        .sort((left, right) => {
+          const providerComparison = left.provider.localeCompare(right.provider);
+          if (providerComparison !== 0) return providerComparison;
+          return left.name.localeCompare(right.name);
+        }),
+    [modelCatalog]
+  );
+  const filteredPairableModels = useMemo(() => {
+    const query = pairModelSearch.trim().toLowerCase();
+    if (!query) return pairableModels;
+    return pairableModels.filter((model) => {
+      const haystack = `${model.name} ${model.provider} ${model.id}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [pairModelSearch, pairableModels]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -411,6 +450,50 @@ export default function LaboratoryPage() {
     [router]
   );
 
+  const togglePairModel = useCallback((modelId: string) => {
+    setSelectedPairModelIds((prev) => {
+      if (prev.includes(modelId)) {
+        return prev.filter((id) => id !== modelId);
+      }
+      return [...prev, modelId];
+    });
+  }, []);
+
+  const clearPairForm = useCallback(() => {
+    setPairName("");
+    setPairTagsInput("");
+    setPairModelSearch("");
+    setSelectedPairModelIds([]);
+  }, []);
+
+  const handleSavePair = useCallback(() => {
+    const name = pairName.trim();
+    if (!name) {
+      setPairNotice({ kind: "error", text: "Pair name is required." });
+      return;
+    }
+    if (selectedPairModelIds.length < 2) {
+      setPairNotice({ kind: "error", text: "Select at least 2 models for a pair." });
+      return;
+    }
+
+    const tags = parseTags(pairTagsInput);
+    const preset: LabPreset = {
+      id: typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now()),
+      name,
+      models: selectedPairModelIds,
+      subject: "Laboratory",
+      tags,
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextPresets = upsertLabPreset(preset);
+    setAssets(presetsToAssets(nextPresets));
+    setPairNotice({ kind: "success", text: "Model pair saved to your Laboratory dashboard." });
+    clearPairForm();
+    setShowPairBuilder(false);
+  }, [clearPairForm, pairName, pairTagsInput, selectedPairModelIds]);
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString([], { month: "short", day: "numeric" });
@@ -423,6 +506,22 @@ export default function LaboratoryPage() {
       counts[asset.scope] = (counts[asset.scope] || 0) + 1;
     });
     return counts;
+  }, [assets]);
+
+  const dashboardStats = useMemo(() => {
+    const totalPairs = assets.length;
+    const uniqueModels = new Set(assets.flatMap((asset) => asset.models ?? [])).size;
+    const uniqueTags = new Set(assets.flatMap((asset) => asset.tags)).size;
+    const avgModelsPerPair =
+      totalPairs > 0
+        ? assets.reduce((sum, asset) => sum + (asset.models?.length ?? 0), 0) / totalPairs
+        : 0;
+    return {
+      totalPairs,
+      uniqueModels,
+      uniqueTags,
+      avgModelsPerPair,
+    };
   }, [assets]);
 
   return (
@@ -495,28 +594,32 @@ export default function LaboratoryPage() {
                   padding="$sm"
                   gap="$xs"
                 >
-                  {[
-                    { type: "agent", label: "AI Agent", icon: Sparkles },
-                    { type: "workflow", label: "Workflow", icon: Workflow },
-                    { type: "pipeline", label: "Pipeline", icon: Layers },
-                    { type: "dataset", label: "Dataset", icon: Database },
-                    { type: "file", label: "Upload Files", icon: Upload },
-                  ].map(({ type, label, icon: Icon }) => (
-                    <Button
-                      key={type}
-                      size="$3"
-                      backgroundColor="transparent"
-                      color={colors.text}
-                      justifyContent="flex-start"
-                      icon={<Icon size={16} color={assetTypeColors[type as AssetType]} />}
-                      onPress={() => {
-                        setShowCreateMenu(false);
-                        // TODO: Navigate to creation flow
-                      }}
-                    >
-                      {label}
-                    </Button>
-                  ))}
+                  <Button
+                    size="$3"
+                    backgroundColor={colors.bgTertiary}
+                    color={colors.text}
+                    justifyContent="flex-start"
+                    icon={<Layers size={16} color={colors.accent} />}
+                    onPress={() => {
+                      setShowCreateMenu(false);
+                      setShowPairBuilder(true);
+                    }}
+                  >
+                    Save Model Pair
+                  </Button>
+                  <Button
+                    size="$3"
+                    backgroundColor="transparent"
+                    color={colors.text}
+                    justifyContent="flex-start"
+                    icon={<Bot size={16} color={colors.blue} />}
+                    onPress={() => {
+                      setShowCreateMenu(false);
+                      router.push("/models");
+                    }}
+                  >
+                    Open Model Hub
+                  </Button>
                 </YStack>
               )}
             </YStack>
@@ -619,6 +722,275 @@ export default function LaboratoryPage() {
 
           {/* Main Content - Asset Gallery */}
           <YStack flex={1} padding="$lg" gap="$lg">
+            {pairNotice && (
+              <XStack
+                padding="$sm"
+                borderRadius="$md"
+                borderWidth={1}
+                borderColor={pairNotice.kind === "success" ? colors.accent : colors.red}
+                backgroundColor={
+                  pairNotice.kind === "success"
+                    ? isDark
+                      ? "rgba(34, 197, 94, 0.14)"
+                      : "rgba(34, 197, 94, 0.1)"
+                    : isDark
+                      ? "rgba(239, 68, 68, 0.18)"
+                      : "rgba(239, 68, 68, 0.1)"
+                }
+              >
+                <Text fontSize={13} color={pairNotice.kind === "success" ? colors.accent : colors.red}>
+                  {pairNotice.text}
+                </Text>
+              </XStack>
+            )}
+
+            <XStack gap="$md" flexWrap="wrap">
+              {[
+                { label: "Saved Pairs", value: dashboardStats.totalPairs },
+                { label: "Unique Models", value: dashboardStats.uniqueModels },
+                { label: "Unique Tags", value: dashboardStats.uniqueTags },
+                {
+                  label: "Avg Models / Pair",
+                  value: dashboardStats.totalPairs > 0 ? dashboardStats.avgModelsPerPair.toFixed(1) : "0.0",
+                },
+              ].map((stat) => (
+                <YStack
+                  key={stat.label}
+                  minWidth={170}
+                  flex={1}
+                  padding="$md"
+                  borderRadius="$lg"
+                  borderWidth={1}
+                  borderColor={colors.border}
+                  backgroundColor={colors.bgSecondary}
+                  gap="$xs"
+                >
+                  <Text fontSize={11} color={colors.textMuted} textTransform="uppercase" letterSpacing={0.5}>
+                    {stat.label}
+                  </Text>
+                  <Text fontSize={24} fontWeight="700" color={colors.text}>
+                    {String(stat.value)}
+                  </Text>
+                </YStack>
+              ))}
+            </XStack>
+
+            <YStack
+              padding="$lg"
+              borderRadius="$lg"
+              borderWidth={1}
+              borderColor={colors.border}
+              backgroundColor={colors.bgSecondary}
+              gap="$md"
+              style={{
+                backgroundImage: isDark
+                  ? "radial-gradient(circle at 0% 0%, rgba(34,197,94,0.16), transparent 58%), radial-gradient(circle at 90% 10%, rgba(59,130,246,0.12), transparent 45%)"
+                  : "radial-gradient(circle at 0% 0%, rgba(34,197,94,0.14), transparent 58%), radial-gradient(circle at 90% 10%, rgba(59,130,246,0.1), transparent 45%)",
+              }}
+            >
+              <XStack justifyContent="space-between" alignItems="center" gap="$md" flexWrap="wrap">
+                <YStack gap="$xs" maxWidth={680}>
+                  <Text fontSize={18} fontWeight="700" color={colors.text}>
+                    Model Pair Dashboard
+                  </Text>
+                  <Paragraph color={colors.textMuted} fontSize={13}>
+                    Save named model pairs with tags, reuse them in Studio, and manage everything from one dashboard.
+                  </Paragraph>
+                </YStack>
+                <Button
+                  size="$3"
+                  backgroundColor={colors.accent}
+                  color="black"
+                  fontWeight="700"
+                  onPress={() => {
+                    setShowPairBuilder((prev) => !prev);
+                    setShowCreateMenu(false);
+                    setPairNotice(null);
+                  }}
+                  icon={<Plus size={16} />}
+                >
+                  {showPairBuilder ? "Close Builder" : "Save Model Pair"}
+                </Button>
+              </XStack>
+
+              {showPairBuilder && (
+                <YStack
+                  gap="$md"
+                  padding="$md"
+                  borderWidth={1}
+                  borderColor={colors.border}
+                  borderRadius="$md"
+                  backgroundColor={colors.bg}
+                >
+                  <XStack gap="$md" flexWrap="wrap">
+                    <YStack gap="$xs" flex={1} minWidth={260}>
+                      <Text fontSize={12} color={colors.textMuted} fontWeight="600">
+                        Pair name
+                      </Text>
+                      <Input
+                        value={pairName}
+                        onChangeText={setPairName}
+                        placeholder="e.g. Fast + Deep pair"
+                        backgroundColor={colors.bgSecondary}
+                        borderColor={colors.border}
+                        color={colors.text}
+                        placeholderTextColor={colors.textSecondary}
+                      />
+                    </YStack>
+                    <YStack gap="$xs" flex={1} minWidth={260}>
+                      <Text fontSize={12} color={colors.textMuted} fontWeight="600">
+                        Tags
+                      </Text>
+                      <Input
+                        value={pairTagsInput}
+                        onChangeText={setPairTagsInput}
+                        placeholder="coding, review, cheap"
+                        backgroundColor={colors.bgSecondary}
+                        borderColor={colors.border}
+                        color={colors.text}
+                        placeholderTextColor={colors.textSecondary}
+                      />
+                    </YStack>
+                  </XStack>
+
+                  <YStack gap="$xs">
+                    <Text fontSize={12} color={colors.textMuted} fontWeight="600">
+                      {`Choose models (${selectedPairModelIds.length} selected)`}
+                    </Text>
+                    <XStack
+                      alignItems="center"
+                      gap="$xs"
+                      paddingHorizontal="$sm"
+                      paddingVertical="$xs"
+                      borderWidth={1}
+                      borderColor={colors.border}
+                      borderRadius="$md"
+                      backgroundColor={colors.bgSecondary}
+                    >
+                      <Search size={14} color={colors.textMuted} />
+                      <Input
+                        value={pairModelSearch}
+                        onChangeText={setPairModelSearch}
+                        placeholder="Search models by name or provider"
+                        flex={1}
+                        backgroundColor="transparent"
+                        borderWidth={0}
+                        color={colors.text}
+                        placeholderTextColor={colors.textSecondary}
+                        fontSize={13}
+                      />
+                      {pairModelSearch && (
+                        <Button
+                          size="$1"
+                          backgroundColor="transparent"
+                          borderWidth={0}
+                          onPress={() => setPairModelSearch("")}
+                          icon={<X size={14} color={colors.textMuted} />}
+                        />
+                      )}
+                    </XStack>
+                  </YStack>
+
+                  {selectedPairModelIds.length > 0 && (
+                    <XStack flexWrap="wrap" gap="$xs">
+                      {selectedPairModelIds.map((modelId) => {
+                        const model = modelMetaMap.get(modelId);
+                        return (
+                          <Button
+                            key={modelId}
+                            size="$2"
+                            backgroundColor={colors.bgSecondary}
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            color={colors.text}
+                            borderRadius="$full"
+                            onPress={() => togglePairModel(modelId)}
+                            icon={<X size={12} color={colors.textMuted} />}
+                          >
+                            {`${getProviderIcon(model?.provider ?? "")} ${model?.name ?? modelId}`}
+                          </Button>
+                        );
+                      })}
+                    </XStack>
+                  )}
+
+                  <YStack
+                    gap="$xs"
+                    padding="$sm"
+                    borderWidth={1}
+                    borderColor={colors.border}
+                    borderRadius="$md"
+                    backgroundColor={colors.bgSecondary}
+                    maxHeight={260}
+                    overflow="scroll"
+                  >
+                    {filteredPairableModels.length === 0 ? (
+                      <Text fontSize={12} color={colors.textMuted}>
+                        No models match that search.
+                      </Text>
+                    ) : (
+                      filteredPairableModels.map((model) => {
+                        const selected = selectedPairModelIds.includes(model.id);
+                        return (
+                          <Button
+                            key={model.id}
+                            size="$2"
+                            justifyContent="space-between"
+                            backgroundColor={selected ? colors.accentBg : "transparent"}
+                            borderWidth={1}
+                            borderColor={selected ? colors.accent : colors.border}
+                            color={colors.text}
+                            onPress={() => togglePairModel(model.id)}
+                          >
+                            <XStack alignItems="center" gap="$sm" width="100%" justifyContent="space-between">
+                              <YStack alignItems="flex-start" gap="$xxs">
+                                <Text fontSize={13} color={colors.text}>
+                                  {model.name}
+                                </Text>
+                                <Text fontSize={11} color={colors.textMuted}>
+                                  {`${getProviderIcon(model.provider)} ${model.provider}`}
+                                </Text>
+                              </YStack>
+                              {selected && <CheckCircle2 size={14} color={colors.accent} />}
+                            </XStack>
+                          </Button>
+                        );
+                      })
+                    )}
+                  </YStack>
+
+                  <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$sm">
+                    <Text fontSize={11} color={colors.textMuted}>
+                      Pairs require at least 2 models and can be reused in Studio.
+                    </Text>
+                    <XStack gap="$sm">
+                      <Button
+                        size="$2"
+                        backgroundColor="transparent"
+                        borderWidth={1}
+                        borderColor={colors.border}
+                        color={colors.text}
+                        onPress={() => {
+                          clearPairForm();
+                          setShowPairBuilder(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="$2"
+                        backgroundColor={colors.accent}
+                        color="black"
+                        onPress={handleSavePair}
+                      >
+                        Save Pair
+                      </Button>
+                    </XStack>
+                  </XStack>
+                </YStack>
+              )}
+            </YStack>
+
             {/* Toolbar */}
             <XStack justifyContent="space-between" alignItems="center" gap="$md">
               <XStack flex={1} maxWidth={400} alignItems="center" gap="$xs" paddingHorizontal="$md" paddingVertical="$sm" backgroundColor={colors.bgSecondary} borderRadius="$md" borderWidth={1} borderColor={colors.border}>
@@ -712,7 +1084,7 @@ export default function LaboratoryPage() {
                   </H2>
                   <Paragraph color={colors.textMuted} textAlign="center">
                     {assets.length === 0
-                      ? "Start by creating AI assets, uploading files, or saving model presets from the Model Hub."
+                      ? "Start by saving named model pairs with tags, then reuse them in Studio."
                       : "Try adjusting your search or filters to find what you're looking for."}
                   </Paragraph>
                 </YStack>
@@ -729,13 +1101,12 @@ export default function LaboratoryPage() {
                     </Button>
                     <Button
                       size="$3"
-                      backgroundColor={colors.bgTertiary}
-                      color={colors.text}
-                      borderWidth={1}
-                      borderColor={colors.border}
-                      icon={<Upload size={16} />}
+                      backgroundColor={colors.accent}
+                      color="black"
+                      icon={<Layers size={16} />}
+                      onPress={() => setShowPairBuilder(true)}
                     >
-                      Upload Files
+                      Save Model Pair
                     </Button>
                   </XStack>
                 )}

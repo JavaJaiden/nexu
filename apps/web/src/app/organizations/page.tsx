@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, H1, Paragraph, Text, XStack, YStack, Input } from "tamagui";
 import Header from "@/components/Header";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type OrganizationMembership = {
   role: "owner" | "admin" | "member";
@@ -62,14 +63,14 @@ export default function OrganizationsPage() {
 
   const loadOrganizations = useCallback(async () => {
     const res = await fetch("/api/settings/organizations", { cache: "no-store" });
-    const payload = (await res.json()) as {
+    const payload = await readResponseJson<{
       organizations?: OrganizationMembership[];
       error?: string;
-    };
+    }>(res);
     if (!res.ok) {
-      throw new Error(payload.error || "Failed to load organizations.");
+      throw new Error(readResponseError(res, payload, "Failed to load organizations."));
     }
-    const orgs = Array.isArray(payload.organizations) ? payload.organizations : [];
+    const orgs = Array.isArray(payload?.organizations) ? payload.organizations : [];
     setOrganizations(orgs);
     setSelectedOrganizationId((current) => {
       if (current && orgs.some((entry) => entry.organization.id === current)) return current;
@@ -88,12 +89,12 @@ export default function OrganizationsPage() {
         `/api/settings/organization/members?organizationId=${encodeURIComponent(organizationId)}`,
         { cache: "no-store" }
       );
-      const payload = (await res.json()) as MembersPayload & { error?: string };
-      if (!res.ok) throw new Error(payload.error || "Failed to load organization members.");
+      const payload = await readResponseJson<MembersPayload & { error?: string }>(res);
+      if (!res.ok) throw new Error(readResponseError(res, payload, "Failed to load organization members."));
       setMembersData({
-        role: payload.role,
-        members: Array.isArray(payload.members) ? payload.members : [],
-        invitations: Array.isArray(payload.invitations) ? payload.invitations : [],
+        role: payload?.role ?? "member",
+        members: Array.isArray(payload?.members) ? payload.members : [],
+        invitations: Array.isArray(payload?.invitations) ? payload.invitations : [],
       });
     } finally {
       setMembersLoading(false);
@@ -152,9 +153,9 @@ export default function OrganizationsPage() {
           role: inviteRole,
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to send invitation.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to send invitation."));
       }
       setInviteEmail("");
       await loadMembers(selectedOrganizationId);

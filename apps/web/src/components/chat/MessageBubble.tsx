@@ -143,6 +143,15 @@ function SolveCard({
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasSteps = solve.steps.length > 0;
+  const hasCitations =
+    showCitations &&
+    Array.isArray(solve.citations) &&
+    solve.citations.length > 0;
+  const hasDetails =
+    hasSteps ||
+    hasCitations ||
+    Boolean(solve.selectionReason) ||
+    Boolean(solve.gatewayNote);
 
   return (
     <YStack
@@ -165,7 +174,7 @@ function SolveCard({
             </Text>
           )}
         </XStack>
-        {hasSteps && (
+        {hasDetails && (
           <Button
             size="$2"
             backgroundColor="transparent"
@@ -196,21 +205,45 @@ function SolveCard({
         </XStack>
       )}
 
-      {solve.selectionReason && (
-        <Text fontSize={12} color="$textMuted" fontStyle="italic">
-          {solve.selectionReason}
-        </Text>
-      )}
-
-      {expanded && showSteps && hasSteps && (
+      {expanded && (
         <YStack gap="$xs" marginTop="$xs">
-          {solve.steps.map((step, index) => (
-            <SolveStep
-              key={`${solve.model ?? "model"}-step-${step}`}
-              step={step}
-              index={index}
-            />
-          ))}
+          {showSteps && hasSteps && (
+            <YStack gap="$xs">
+              {solve.steps.map((step, index) => (
+                <SolveStep
+                  key={`${solve.model ?? "model"}-step-${step}`}
+                  step={step}
+                  index={index}
+                />
+              ))}
+            </YStack>
+          )}
+
+          {hasCitations && (
+            <YStack gap="$xs">
+              {solve.citations?.map((citation) => (
+                <Text
+                  key={`${solve.model ?? "model"}-citation-${citation}`}
+                  fontSize={12}
+                  color="$textMuted"
+                >
+                  • {citation}
+                </Text>
+              ))}
+            </YStack>
+          )}
+
+          {solve.selectionReason && (
+            <Text fontSize={12} color="$textMuted" fontStyle="italic">
+              {solve.selectionReason}
+            </Text>
+          )}
+
+          {solve.gatewayNote && (
+            <Text fontSize={12} color="$textMuted">
+              Gateway: {solve.gatewayNote}
+            </Text>
+          )}
         </YStack>
       )}
 
@@ -412,12 +445,13 @@ export default function MessageBubble({
   const toolData = useMemo(() => {
     if (isUser) return null;
 
+    const seededTools = toolOverride ?? message.tools;
     const parts = (message as ChatMessage & { parts?: any[] }).parts ?? [];
     const solveQuestions: SolveOutput[] = [
-      ...(toolOverride?.solveQuestions ?? []),
+      ...(seededTools?.solveQuestions ?? []),
     ];
-    let subject = toolOverride?.detectSubject;
-    const routeModels = [...(toolOverride?.routeModels ?? [])];
+    let subject = seededTools?.detectSubject;
+    const routeModels = [...(seededTools?.routeModels ?? [])];
 
     parts.forEach((part) => {
       if (part?.type === "tool-invocation" && part.toolInvocation) {
@@ -503,8 +537,27 @@ export default function MessageBubble({
       lines.push(`Mode: ${latestRoute.mode}`);
     }
 
+    if (finalSolve?.model) {
+      lines.push(`Model: ${finalSolve.model}`);
+    }
+    if (typeof finalSolve?.durationMs === "number") {
+      lines.push(`Latency: ${formatLatency(finalSolve.durationMs)}`);
+    }
+    if (finalSolve?.selectionReason) {
+      lines.push(`Selection: ${finalSolve.selectionReason}`);
+    }
+    if (finalSolve?.gatewayNote) {
+      lines.push(`Gateway: ${finalSolve.gatewayNote}`);
+    }
+    if (Array.isArray(finalSolve?.citations) && finalSolve.citations.length > 0) {
+      lines.push(`Citations: ${finalSolve.citations.length}`);
+    }
+    if (Array.isArray(finalSolve?.steps) && finalSolve.steps.length > 0) {
+      lines.push(`Steps: ${finalSolve.steps.length}`);
+    }
+
     return lines;
-  }, [toolData]);
+  }, [toolData, finalSolve]);
 
   // User message
   if (isUser) {

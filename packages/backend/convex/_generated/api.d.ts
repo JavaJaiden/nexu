@@ -13,6 +13,8 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as crons from "../crons.js";
+import type * as leaderboardModels from "../leaderboardModels.js";
 import type * as notes from "../notes.js";
 import type * as openai from "../openai.js";
 import type * as utils from "../utils.js";
@@ -26,6 +28,8 @@ import type * as utils from "../utils.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
+  leaderboardModels: typeof leaderboardModels;
   notes: typeof notes;
   openai: typeof openai;
   utils: typeof utils;

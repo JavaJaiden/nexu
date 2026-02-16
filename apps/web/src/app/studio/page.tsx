@@ -29,10 +29,19 @@ import {
   loadHistory,
   normalizeHistoryEntries,
   saveHistory,
+  type TranscriptItem,
   type TranscriptMessage,
   upsertHistoryEntry,
 } from "@/lib/historyStore";
-import { type LabPreset, loadLabPresets } from "@/lib/labStore";
+import {
+  type LabCombinationSummary,
+  type LabExperiment,
+  type LabPreset,
+  loadLabExperiments,
+  loadLabPresets,
+  recordLabExperiment,
+  summarizeLabCombinations,
+} from "@/lib/labStore";
 import {
   buildModelHubCardsFromIds,
   getProviderIcon,
@@ -45,6 +54,50 @@ const HISTORY_PAGE_SIZE = 3;
 
 function isMultiModelProject(project: HistoryEntry) {
   return project.models.length > 1 || project.subject === "Model Hub Compare";
+}
+
+function normalizeSubject(subject?: string) {
+  const value = (subject ?? "").trim();
+  return value.length > 0 ? value : "General";
+}
+
+function detectSubjectFromTranscript(transcript: TranscriptItem[]) {
+  for (const item of transcript) {
+    if (!("role" in item) || item.role !== "assistant") continue;
+    const candidate = item.tools?.detectSubject?.subject;
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function inferBestModelOutcome(transcript: TranscriptItem[], selectedModelIds: string[]) {
+  let bestModel: string | undefined;
+  let bestScore: number | undefined;
+
+  for (const item of transcript) {
+    if (!("role" in item) || item.role !== "assistant") continue;
+    const solves = item.tools?.solveQuestions ?? [];
+    for (const solve of solves) {
+      const modelId = typeof solve.model === "string" ? solve.model : undefined;
+      if (!modelId || !selectedModelIds.includes(modelId)) continue;
+      const confidence =
+        typeof solve.confidence === "number" && Number.isFinite(solve.confidence)
+          ? Math.max(0, Math.min(1, solve.confidence))
+          : undefined;
+      if (bestScore === undefined || (confidence ?? 0) > bestScore) {
+        bestModel = modelId;
+        bestScore = confidence ?? bestScore;
+      }
+    }
+  }
+
+  if (!bestModel && selectedModelIds.length === 1) {
+    bestModel = selectedModelIds[0];
+  }
+
+  return { bestModel, score: bestScore };
 }
 
 function StudioPageContent() {
@@ -120,6 +173,7 @@ function StudioPageContent() {
     [modelCatalog]
   );
   const [labPresets, setLabPresets] = useState<LabPreset[]>([]);
+  const [labExperiments, setLabExperiments] = useState<LabExperiment[]>([]);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -182,6 +236,7 @@ function StudioPageContent() {
     const localEntries = loadHistory();
     setProjects(localEntries);
     setLabPresets(loadLabPresets());
+    setLabExperiments(loadLabExperiments());
 
     let isCancelled = false;
     const syncHistoryFromServer = async () => {
@@ -210,11 +265,14 @@ function StudioPageContent() {
     };
     void syncHistoryFromServer();
 
-    const handler = () => setLabPresets(loadLabPresets());
-    window.addEventListener("lab-presets-updated", handler);
+    const presetsHandler = () => setLabPresets(loadLabPresets());
+    const experimentsHandler = () => setLabExperiments(loadLabExperiments());
+    window.addEventListener("lab-presets-updated", presetsHandler);
+    window.addEventListener("lab-experiments-updated", experimentsHandler);
     return () => {
       isCancelled = true;
-      window.removeEventListener("lab-presets-updated", handler);
+      window.removeEventListener("lab-presets-updated", presetsHandler);
+      window.removeEventListener("lab-experiments-updated", experimentsHandler);
     };
   }, [syncHistoryBatchToServer]);
 
@@ -275,6 +333,16 @@ function StudioPageContent() {
     [projects, selectedProjectId]
   );
 
+  const activeSubject = useMemo(
+    () => normalizeSubject(activeProject?.subject),
+    [activeProject?.subject]
+  );
+
+  const subjectCombinationStats = useMemo<LabCombinationSummary[]>(
+    () => summarizeLabCombinations(labExperiments, activeSubject, 4),
+    [labExperiments, activeSubject]
+  );
+
   // Build initial timeline from project
   const initialTimeline = useMemo((): ChatEntry[] | undefined => {
     if (pendingBranchSeed && !activeProject) {
@@ -296,6 +364,7 @@ function StudioPageContent() {
               id: `${chatId}-branch-assistant`,
               role: "assistant",
               content: answer,
+              tools: pendingBranchSeed.tools,
             } as Message & { snapshotId?: string },
           },
         ];
@@ -317,6 +386,7 @@ function StudioPageContent() {
               role: item.role,
               content: item.content ?? "",
               snapshotId: item.snapshotId,
+              tools: item.role === "assistant" ? item.tools : undefined,
             } as Message & { snapshotId?: string },
           };
         }
@@ -448,7 +518,8 @@ function StudioPageContent() {
         : null;
       const nextTranscriptSignature = JSON.stringify(transcript);
       const createdAt = existing?.createdAt ?? new Date().toISOString();
-      const subject = existing?.subject ?? "General";
+      const detectedSubject = detectSubjectFromTranscript(transcript);
+      const subject = normalizeSubject(detectedSubject ?? existing?.subject);
       const shouldOverrideModels = hasRun || !existing;
       const normalizedModels =
         models.length && shouldOverrideModels
@@ -494,6 +565,20 @@ function StudioPageContent() {
       });
       setProjects(nextEntries);
       persistHistoryEntryToServer(nextEntry);
+
+      if (hasRun) {
+        const { bestModel, score } = inferBestModelOutcome(transcript, finalModels);
+        const nextExperiments = recordLabExperiment({
+          id: chatId,
+          question,
+          models: finalModels,
+          createdAt,
+          subject,
+          bestModel,
+          score,
+        });
+        setLabExperiments(nextExperiments);
+      }
     },
     [chatId, persistHistoryEntryToServer]
   );
@@ -905,6 +990,7 @@ function StudioPageContent() {
                     onChange={setPreferredModels}
                     models={modelCatalog}
                     presets={labPresets}
+                    subject={activeSubject}
                     defaultCount={3}
                   />
 
@@ -947,6 +1033,55 @@ function StudioPageContent() {
                       ? `${preferredModels.length} models selected`
                       : "Using default Nexus routers"}
                   </Text>
+
+                  <YStack
+                    marginTop="$sm"
+                    padding="$sm"
+                    borderWidth={1}
+                    borderColor={colors.border}
+                    borderRadius="$md"
+                    backgroundColor={colors.bg}
+                    gap="$xs"
+                  >
+                    <Text fontSize={11} fontWeight="600" color={colors.textMuted}>
+                      {`Best Stacks • ${activeSubject}`}
+                    </Text>
+                    {subjectCombinationStats.length === 0 ? (
+                      <Text fontSize={11} color={colors.textSecondary}>
+                        Complete a few runs to build subject-level performance history.
+                      </Text>
+                    ) : (
+                      subjectCombinationStats.map((combo) => {
+                        const title = combo.models
+                          .map((modelId) => modelNameMap.get(modelId) ?? modelId)
+                          .slice(0, 3)
+                          .join(", ");
+                        const subtitle = `${combo.runs} runs • ${Math.round(combo.winRate * 100)}% top-result rate`;
+                        return (
+                          <Button
+                            key={combo.key}
+                            size="$2"
+                            backgroundColor={colors.bgTertiary}
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            color={colors.text}
+                            justifyContent="space-between"
+                            onPress={() => setPreferredModels(combo.models)}
+                          >
+                            <YStack alignItems="flex-start" flex={1} gap="$xxs">
+                              <Text fontSize={11} color={colors.text}>
+                                {title}
+                              </Text>
+                              <Text fontSize={10} color={colors.textMuted}>
+                                {subtitle}
+                              </Text>
+                            </YStack>
+                            <ChevronRight size={12} color={colors.textMuted} />
+                          </Button>
+                        );
+                      })
+                    )}
+                  </YStack>
                 </YStack>
 
                 <YStack gap="$xs" minWidth={200}>

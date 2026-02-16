@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import { readResponseError, readResponseJson } from "@/lib/http";
 
 type OrganizationMembership = {
   role: "owner" | "admin" | "member";
@@ -62,8 +63,8 @@ export default function OrganizationMembersPage() {
       ? `?organizationId=${encodeURIComponent(organizationId)}`
       : "";
     const res = await fetch(`/api/settings/organization/members${query}`, { cache: "no-store" });
-    const payload = (await res.json()) as MembersResponse & { error?: string };
-    if (!res.ok) throw new Error(payload.error || "Failed to load organization members.");
+    const payload = await readResponseJson<MembersResponse & { error?: string }>(res);
+    if (!res.ok || !payload) throw new Error(readResponseError(res, payload, "Failed to load organization members."));
     setData(payload);
     setSelectedOrganizationId(payload.selectedOrganizationId);
   }, []);
@@ -107,8 +108,8 @@ export default function OrganizationMembersPage() {
           role: inviteRole,
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to invite member.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) throw new Error(readResponseError(res, payload, "Failed to invite member."));
       setInviteEmail("");
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Invitation sent." });
@@ -135,9 +136,9 @@ export default function OrganizationMembersPage() {
           role,
         }),
       });
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to update role.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to update role."));
       }
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Member role updated." });
@@ -159,9 +160,9 @@ export default function OrganizationMembersPage() {
         )}&memberUserId=${encodeURIComponent(memberUserId)}`,
         { method: "DELETE" }
       );
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to remove member.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to remove member."));
       }
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Member removed." });
@@ -183,9 +184,9 @@ export default function OrganizationMembersPage() {
         )}`,
         { method: "DELETE" }
       );
-      const payload = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.error || "Failed to revoke invitation.");
+      const payload = await readResponseJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(readResponseError(res, payload, "Failed to revoke invitation."));
       }
       await load(data.organization.id);
       setNotice({ kind: "success", text: "Invitation revoked." });

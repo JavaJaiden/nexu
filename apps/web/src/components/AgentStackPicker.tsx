@@ -21,6 +21,7 @@ type AgentOption = {
 type PresetOption = {
   id: string;
   name: string;
+  subject: string;
   modelIds: string[];
   searchText: string;
 };
@@ -30,6 +31,7 @@ type AgentStackPickerProps = {
   onChange: (ids: string[]) => void;
   models: ModelCard[];
   presets?: LabPreset[];
+  subject?: string;
   defaultCount: number;
 };
 
@@ -50,7 +52,9 @@ function buildSearchText(model: ModelCard) {
 }
 
 function buildPresetSearchText(preset: LabPreset) {
-  return `${preset.name} ${preset.subject} ${preset.models.join(" ")}`.toLowerCase();
+  const subject = (preset.subject ?? "General").trim() || "General";
+  const tags = Array.isArray(preset.tags) ? preset.tags.join(" ") : "";
+  return `${preset.name} ${subject} ${tags} ${preset.models.join(" ")}`.toLowerCase();
 }
 
 function Row({
@@ -151,6 +155,7 @@ export default function AgentStackPicker({
   onChange,
   models,
   presets = [],
+  subject,
   defaultCount,
 }: AgentStackPickerProps) {
   const [open, setOpen] = useState(false);
@@ -182,11 +187,17 @@ export default function AgentStackPicker({
       presets.map((preset) => ({
         id: preset.id,
         name: preset.name,
+        subject: (preset.subject ?? "General").trim() || "General",
         modelIds: preset.models,
         searchText: buildPresetSearchText(preset),
       })),
     [presets]
   );
+
+  const normalizedSubject = useMemo(() => {
+    const value = (subject ?? "").trim();
+    return value.length > 0 ? value.toLowerCase() : null;
+  }, [subject]);
 
   const proCount = useMemo(() => options.filter((option) => option.tier === "pro").length, [options]);
   const modelCount = options.length;
@@ -255,8 +266,14 @@ export default function AgentStackPicker({
     [options, matchesSearch]
   );
   const filteredPresets = useMemo(
-    () => presetOptions.filter((preset) => matchesSearch(preset.searchText)),
-    [presetOptions, matchesSearch]
+    () =>
+      presetOptions.filter((preset) => {
+        if (!matchesSearch(preset.searchText)) return false;
+        if (!normalizedSubject) return true;
+        const presetSubject = preset.subject.toLowerCase();
+        return presetSubject === normalizedSubject || presetSubject === "general";
+      }),
+    [presetOptions, matchesSearch, normalizedSubject]
   );
 
   const showDefault = !isSearching || DEFAULT_OPTION.searchText.includes(searchQuery);
@@ -410,7 +427,7 @@ export default function AgentStackPicker({
                       <Row
                         key={preset.id}
                         title={preset.name}
-                        subtitle={`${preset.modelIds.length} models`}
+                        subtitle={`${preset.modelIds.length} models • ${preset.subject}`}
                         selected={presetSelected}
                         active={activeOption?.id === `preset:${preset.id}`}
                         onSelect={() => handleSelectPreset(preset)}
