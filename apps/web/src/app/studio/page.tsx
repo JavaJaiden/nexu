@@ -18,18 +18,23 @@ import AgentPicker from "@/components/AgentPicker";
 import AgentStackPicker from "@/components/AgentStackPicker";
 import type { ChatEntry } from "@/components/chat";
 import { Chat } from "@/components/chat";
-import type { SaveTranscriptPayload } from "@/components/chat/types";
+import type {
+  BranchSeedPayload,
+  SaveTranscriptPayload,
+} from "@/components/chat/types";
 import Header from "@/components/Header";
 import {
   type HistoryEntry,
+  mergeHistoryEntries,
   loadHistory,
+  normalizeHistoryEntries,
+  saveHistory,
   type TranscriptMessage,
   upsertHistoryEntry,
 } from "@/lib/historyStore";
 import { type LabPreset, loadLabPresets } from "@/lib/labStore";
 import {
-  getModelHubCards,
-  getModelNameMap,
+  buildModelHubCardsFromIds,
   getProviderIcon,
   type ModelCard,
 } from "@/lib/modelCatalog";
@@ -66,6 +71,8 @@ function StudioPageContent() {
 
   // Core state
   const [chatId, setChatId] = useState<string>(() => crypto.randomUUID());
+  const [pendingBranchSeed, setPendingBranchSeed] =
+    useState<BranchSeedPayload | null>(null);
   const [mode, setMode] = useState<"fast" | "deep" | "none">("none");
   const [showSteps, setShowSteps] = useState(true);
   const [showCitations, setShowCitations] = useState(true);
@@ -92,7 +99,9 @@ function StudioPageContent() {
   );
 
   // Data
-  const modelCatalog = useMemo(() => getModelHubCards(), []);
+  const [modelCatalog, setModelCatalog] = useState<ModelCard[]>(() =>
+    buildModelHubCardsFromIds([])
+  );
   const allowedModelIds = useMemo(
     () => new Set(modelCatalog.map((model) => model.id)),
     [modelCatalog]
@@ -102,7 +111,10 @@ function StudioPageContent() {
       Array.from(new Set(ids.filter((id) => allowedModelIds.has(id)))),
     [allowedModelIds]
   );
-  const modelNameMap = useMemo(() => getModelNameMap(), []);
+  const modelNameMap = useMemo(
+    () => new Map(modelCatalog.map((model) => [model.id, model.name])),
+    [modelCatalog]
+  );
   const modelMetaMap = useMemo(
     () => new Map(modelCatalog.map((m) => [m.id, m])),
     [modelCatalog]
@@ -112,21 +124,106 @@ function StudioPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const syncHistoryBatchToServer = useCallback((entries: HistoryEntry[]) => {
+    void fetch("/api/studio/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    }).catch(() => {
+      // Ignore sync failures for unauthenticated users and transient network issues.
+    });
+  }, []);
+
+  const persistHistoryEntryToServer = useCallback((entry: HistoryEntry) => {
+    void fetch("/api/studio/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry }),
+    }).catch(() => {
+      // Ignore persistence failures for unauthenticated users and transient network issues.
+    });
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadOpenRouterModels = async () => {
+      try {
+        const response = await fetch("/api/openrouter/models", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          modelIds?: unknown;
+        };
+        const modelIds = Array.isArray(payload.modelIds)
+          ? payload.modelIds.filter(
+              (value): value is string =>
+                typeof value === "string" && value.includes("/")
+            )
+          : [];
+        if (isCancelled) return;
+        setModelCatalog(buildModelHubCardsFromIds(modelIds));
+      } catch {
+        if (isCancelled) return;
+        setModelCatalog(buildModelHubCardsFromIds([]));
+      }
+    };
+
+    void loadOpenRouterModels();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
   // Load initial data
   useEffect(() => {
-    setProjects(loadHistory());
+    const localEntries = loadHistory();
+    setProjects(localEntries);
     setLabPresets(loadLabPresets());
+
+    let isCancelled = false;
+    const syncHistoryFromServer = async () => {
+      try {
+        const response = await fetch("/api/studio/history", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { entries?: unknown };
+        const remoteEntries = normalizeHistoryEntries(payload.entries ?? []);
+        const latestLocal = loadHistory();
+        const mergedEntries = mergeHistoryEntries(latestLocal, remoteEntries);
+        if (isCancelled) return;
+        saveHistory(mergedEntries);
+        setProjects(mergedEntries);
+
+        const mergedSignature = JSON.stringify(mergedEntries);
+        const remoteSignature = JSON.stringify(remoteEntries);
+        if (mergedSignature !== remoteSignature) {
+          syncHistoryBatchToServer(mergedEntries);
+        }
+      } catch {
+        // Ignore history sync failures; local history still works.
+      }
+    };
+    void syncHistoryFromServer();
 
     const handler = () => setLabPresets(loadLabPresets());
     window.addEventListener("lab-presets-updated", handler);
-    return () => window.removeEventListener("lab-presets-updated", handler);
-  }, []);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener("lab-presets-updated", handler);
+    };
+  }, [syncHistoryBatchToServer]);
 
   // Handle project ID from URL
   useEffect(() => {
     const projectId = searchParams.get("project");
     if (projectId) {
       setSelectedProjectId(projectId);
+      setPendingBranchSeed(null);
       setChatId(projectId);
     }
   }, [searchParams]);
@@ -147,6 +244,7 @@ function StudioPageContent() {
       if (validStack.length > 0) {
         setPreferredModels(validStack);
         setSelectedProjectId(null);
+        setPendingBranchSeed(null);
         router.replace("/studio");
       }
     }
@@ -165,6 +263,12 @@ function StudioPageContent() {
     });
   }, [sanitizeModelIds]);
 
+  useEffect(() => {
+    if (aggregatorModel === "auto") return;
+    if (allowedModelIds.has(aggregatorModel)) return;
+    setAggregatorModel("auto");
+  }, [aggregatorModel, allowedModelIds]);
+
   // Get active project
   const activeProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) ?? null,
@@ -173,6 +277,31 @@ function StudioPageContent() {
 
   // Build initial timeline from project
   const initialTimeline = useMemo((): ChatEntry[] | undefined => {
+    if (pendingBranchSeed && !activeProject) {
+      const question = pendingBranchSeed.question.trim();
+      const answer = pendingBranchSeed.answer.trim();
+      if (question && answer) {
+        return [
+          {
+            kind: "message",
+            message: {
+              id: `${chatId}-branch-user`,
+              role: "user",
+              content: question,
+            } as Message & { snapshotId?: string },
+          },
+          {
+            kind: "message",
+            message: {
+              id: `${chatId}-branch-assistant`,
+              role: "assistant",
+              content: answer,
+            } as Message & { snapshotId?: string },
+          },
+        ];
+      }
+    }
+
     if (!activeProject) return undefined;
     let index = 0;
     return activeProject.transcript
@@ -194,7 +323,7 @@ function StudioPageContent() {
         return null;
       })
       .filter((e): e is ChatEntry => Boolean(e));
-  }, [activeProject]);
+  }, [activeProject, chatId, pendingBranchSeed]);
 
   // Build tool overrides from project
   const toolOverrides = useMemo(() => {
@@ -283,9 +412,10 @@ function StudioPageContent() {
   }, []);
 
   // Handlers
-  const handleNewChat = useCallback(() => {
+  const handleNewChat = useCallback((seed?: BranchSeedPayload) => {
     setChatId(crypto.randomUUID());
     setSelectedProjectId(null);
+    setPendingBranchSeed(seed ?? null);
     setAttachments([]);
     router.push("/studio");
   }, [router]);
@@ -293,6 +423,7 @@ function StudioPageContent() {
   const handleSelectProject = useCallback(
     (projectId: string) => {
       setSelectedProjectId(projectId);
+      setPendingBranchSeed(null);
       setChatId(projectId);
       router.push(`/studio?project=${projectId}`);
     },
@@ -362,8 +493,9 @@ function StudioPageContent() {
         moveToTop: hasNewInformation,
       });
       setProjects(nextEntries);
+      persistHistoryEntryToServer(nextEntry);
     },
-    [chatId]
+    [chatId, persistHistoryEntryToServer]
   );
 
   const formatDate = (dateStr: string) => {
@@ -424,7 +556,7 @@ function StudioPageContent() {
                     size="$2"
                     backgroundColor={colors.accent}
                     color="black"
-                    onPress={handleNewChat}
+                    onPress={() => handleNewChat()}
                     icon={<Plus size={14} />}
                   >
                     New
@@ -905,6 +1037,9 @@ function StudioPageContent() {
                 toolOverridesByIndex={toolOverridesByIndex}
                 onSaveTranscript={handleSaveTranscript}
                 onRequestNewChat={handleNewChat}
+                seededFromBranch={Boolean(
+                  pendingBranchSeed && !selectedProjectId
+                )}
               />
             </YStack>
           </YStack>

@@ -161,9 +161,12 @@ function humanizeModelKey(modelKey: string) {
   return mapped.join(" ");
 }
 
-export const externalProviders: ProviderGroup[] = (() => {
+function buildExternalProviders(modelIds: readonly string[]): ProviderGroup[] {
   const groups = new Map<string, ProviderGroup>();
-  gatewayModelIds.forEach((id) => {
+  const seenIds = new Set<string>();
+  modelIds.forEach((id) => {
+    if (seenIds.has(id)) return;
+    seenIds.add(id);
     const [providerKey, modelKey] = id.split("/");
     if (!providerKey || !modelKey) return;
     const label = providerLabels[providerKey] ?? providerKey;
@@ -190,10 +193,16 @@ export const externalProviders: ProviderGroup[] = (() => {
     ...group,
     models: [...group.models].sort((a, b) => a.name.localeCompare(b.name)),
   }));
-})();
+}
 
-export function getModelHubCards(): ModelCard[] {
-  const externalCards: ModelCard[] = externalProviders.flatMap((provider) =>
+export const externalProviders: ProviderGroup[] =
+  buildExternalProviders(gatewayModelIds);
+
+export function buildModelHubCardsFromIds(
+  modelIds: readonly string[]
+): ModelCard[] {
+  const providers = buildExternalProviders(modelIds);
+  const externalCards: ModelCard[] = providers.flatMap((provider) =>
     provider.models.map((model) => ({
       id: model.id,
       name: model.name,
@@ -216,7 +225,15 @@ export function getModelHubCards(): ModelCard[] {
   return [...routerModels, ...externalCards];
 }
 
-export function getModelGroups() {
+export function getModelHubCards(): ModelCard[] {
+  return buildModelHubCardsFromIds(gatewayModelIds);
+}
+
+export function getModelGroups(modelIds: readonly string[] = gatewayModelIds) {
+  const providers =
+    modelIds === gatewayModelIds
+      ? externalProviders
+      : buildExternalProviders(modelIds);
   return [
     {
       label: "Nexus routers",
@@ -225,7 +242,7 @@ export function getModelGroups() {
         value: router.id,
       })),
     },
-    ...externalProviders.map((provider) => ({
+    ...providers.map((provider) => ({
       label: provider.label,
       options: provider.models.map((model) => ({
         label: model.name,
@@ -235,9 +252,11 @@ export function getModelGroups() {
   ];
 }
 
-export function getModelNameMap() {
+export function getModelNameMap(modelIds: readonly string[] = gatewayModelIds) {
   const map = new Map<string, string>();
-  getModelHubCards().forEach((model) => map.set(model.id, model.name));
+  buildModelHubCardsFromIds(modelIds).forEach((model) =>
+    map.set(model.id, model.name)
+  );
   return map;
 }
 

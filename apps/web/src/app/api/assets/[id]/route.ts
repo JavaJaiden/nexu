@@ -14,6 +14,10 @@ import {
   unauthorized,
 } from "@/lib/server/labApi";
 
+function looksLikeOpenRouterModelId(value: string) {
+  return /^[a-z0-9-]+\/[a-z0-9][a-z0-9._:-]*$/i.test(value.trim());
+}
+
 export async function GET(
   _req: Request,
   context: { params: Promise<{ id: string }> | { id: string } }
@@ -65,7 +69,10 @@ export async function PATCH(
     if (existing.type === "model_preset" && body.payload) {
       const preset = assertValidPresetPayload(body.payload);
       const validIds = new Set(getModelHubCards().map((model) => model.id));
-      const invalid = preset.modelIds.find((modelId) => !validIds.has(modelId));
+      const invalid = preset.modelIds.find(
+        (modelId) =>
+          !validIds.has(modelId) && !looksLikeOpenRouterModelId(modelId)
+      );
       if (invalid) return badRequest(`Unknown model id: ${invalid}`);
       payload = preset as unknown as Record<string, unknown>;
     }

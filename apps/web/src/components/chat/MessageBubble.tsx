@@ -11,8 +11,6 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import {
-  type Dispatch,
-  type SetStateAction,
   useEffect,
   useMemo,
   useState,
@@ -42,7 +40,7 @@ function UserAttachmentPreview({
   onOpenImage,
 }: {
   attachment: { name: string; type: string; data: string };
-  onOpenImage?: Dispatch<SetStateAction<LightboxImage | null>>;
+  onOpenImage?: (src: string, name: string) => void;
 }) {
   const isImage = isImageAttachment(attachment);
   const previewSrc = isImage
@@ -72,9 +70,7 @@ function UserAttachmentPreview({
         {isImage ? (
           <button
             type="button"
-            onClick={() =>
-              onOpenImage?.({ src: previewSrc, name: attachment.name })
-            }
+            onClick={() => onOpenImage?.(previewSrc, attachment.name)}
             aria-label={`Open ${attachment.name} preview`}
             style={{
               width: "100%",
@@ -534,7 +530,9 @@ export default function MessageBubble({
                   <UserAttachmentPreview
                     key={`${attachment.name}-${index}`}
                     attachment={attachment}
-                    onOpenImage={setLightboxImage}
+                    onOpenImage={(src, name) => {
+                      setLightboxImage({ src, name });
+                    }}
                   />
                 ))}
               </XStack>

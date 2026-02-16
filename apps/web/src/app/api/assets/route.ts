@@ -28,6 +28,10 @@ const CATEGORIES = new Set<AssetCategory>([
   null,
 ]);
 
+function looksLikeOpenRouterModelId(value: string) {
+  return /^[a-z0-9-]+\/[a-z0-9][a-z0-9._:-]*$/i.test(value.trim());
+}
+
 function parseTypeFilter(value: string | null): AssetType | AssetType[] | "all" {
   if (!value || value === "all") return "all";
   const parts = value
@@ -128,7 +132,9 @@ export async function POST(req: Request) {
     try {
       const preset = assertValidPresetPayload(payload);
       const validIds = new Set(getModelHubCards().map((model) => model.id));
-      const invalidId = preset.modelIds.find((id) => !validIds.has(id));
+      const invalidId = preset.modelIds.find(
+        (id) => !validIds.has(id) && !looksLikeOpenRouterModelId(id)
+      );
       if (invalidId) {
         return badRequest(`Unknown model id: ${invalidId}`);
       }

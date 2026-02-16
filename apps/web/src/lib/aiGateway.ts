@@ -133,13 +133,24 @@ export function resolveGatewayModel(
     };
   }
 
-  const spec = gatewayModels.find((entry) => entry.label === preferredLabel);
+  const normalizedPreferred = preferredLabel.trim();
+  if (normalizedPreferred.includes("/")) {
+    return {
+      model: orOpenAI(normalizedPreferred),
+      resolvedLabel: normalizedPreferred,
+      requestedLabel: normalizedPreferred,
+    };
+  }
+
+  const spec = gatewayModels.find(
+    (entry) => entry.label === normalizedPreferred
+  );
   if (!spec) {
     return {
       model: orOpenAI(fallbackModelId),
       resolvedLabel: fallbackLabel,
-      requestedLabel: preferredLabel,
-      fallbackNote: `Requested model ${preferredLabel} is not in the gateway yet.`,
+      requestedLabel: normalizedPreferred,
+      fallbackNote: `Requested model ${normalizedPreferred} is not in the gateway yet.`,
     };
   }
 
@@ -147,8 +158,8 @@ export function resolveGatewayModel(
     return {
       model: orOpenAI(fallbackModelId),
       resolvedLabel: fallbackLabel,
-      requestedLabel: preferredLabel,
-      fallbackNote: `Requested model ${preferredLabel} is not available yet. Routed to ${fallbackLabel}.`,
+      requestedLabel: normalizedPreferred,
+      fallbackNote: `Requested model ${normalizedPreferred} is not available yet. Routed to ${fallbackLabel}.`,
     };
   }
 

@@ -46,7 +46,11 @@ import {
 } from "lucide-react";
 import Header from "@/components/Header";
 import { loadHistory, type HistoryEntry } from "@/lib/historyStore";
-import { getModelHubCards, getProviderIcon, type ModelCard } from "@/lib/modelCatalog";
+import {
+  buildModelHubCardsFromIds,
+  getProviderIcon,
+  type ModelCard,
+} from "@/lib/modelCatalog";
 import type { LeaderboardModel } from "@/lib/leaderboard";
 import { useThemeSetting } from "@/lib/themeContext";
 import { loadLabPresets, upsertLabPreset, type LabPreset } from "@/lib/labStore";
@@ -261,7 +265,9 @@ function ModelHubContent() {
   const isDark = theme === "dark";
 
   // Data
-  const allModels = useMemo(() => getModelHubCards(), []);
+  const [allModels, setAllModels] = useState<ModelCard[]>(() =>
+    buildModelHubCardsFromIds([])
+  );
   const leaderboardEligibleModels = useMemo(
     () => allModels.filter((model) => !NEXUS_ROUTING_MODEL_IDS.has(model.id)),
     [allModels]
@@ -320,6 +326,35 @@ function ModelHubContent() {
     [isDark]
   );
 
+  useEffect(() => {
+    let isCancelled = false;
+    const loadOpenRouterModels = async () => {
+      try {
+        const response = await fetch("/api/openrouter/models", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { modelIds?: unknown };
+        const modelIds = Array.isArray(payload.modelIds)
+          ? payload.modelIds.filter(
+              (value): value is string =>
+                typeof value === "string" && value.includes("/")
+            )
+          : [];
+        if (isCancelled) return;
+        setAllModels(buildModelHubCardsFromIds(modelIds));
+      } catch {
+        if (isCancelled) return;
+        setAllModels(buildModelHubCardsFromIds([]));
+      }
+    };
+    void loadOpenRouterModels();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
   // Load data
   useEffect(() => {
     setHistoryEntries(loadHistory());
@@ -347,6 +382,19 @@ function ModelHubContent() {
       setSelectedIds(new Set(ids));
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const allowed = new Set(
+      allModels
+        .map((model) => model.id)
+        .filter((id) => !NEXUS_ROUTING_MODEL_IDS.has(id))
+    );
+    setSelectedIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => allowed.has(id)));
+      if (next.size === prev.size) return prev;
+      return next;
+    });
+  }, [allModels]);
 
   // Close filter panel on click outside
   useEffect(() => {

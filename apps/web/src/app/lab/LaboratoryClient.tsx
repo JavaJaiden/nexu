@@ -47,7 +47,11 @@ import {
 } from "lucide-react";
 import Header from "@/components/Header";
 import { useThemeSetting } from "@/lib/themeContext";
-import { getProviderIcon, getModelHubCards, type ModelCard } from "@/lib/modelCatalog";
+import {
+  buildModelHubCardsFromIds,
+  getProviderIcon,
+  type ModelCard,
+} from "@/lib/modelCatalog";
 import {
   loadLabPresets,
   removeLabPreset,
@@ -301,11 +305,42 @@ export default function LaboratoryPage() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
 
-  const modelCatalog = useMemo(() => getModelHubCards(), []);
+  const [modelCatalog, setModelCatalog] = useState<ModelCard[]>(() =>
+    buildModelHubCardsFromIds([])
+  );
   const modelMetaMap = useMemo(
     () => new Map(modelCatalog.map((m) => [m.id, m])),
     [modelCatalog]
   );
+
+  useEffect(() => {
+    let isCancelled = false;
+    const loadOpenRouterModels = async () => {
+      try {
+        const response = await fetch("/api/openrouter/models", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { modelIds?: unknown };
+        const modelIds = Array.isArray(payload.modelIds)
+          ? payload.modelIds.filter(
+              (value): value is string =>
+                typeof value === "string" && value.includes("/")
+            )
+          : [];
+        if (isCancelled) return;
+        setModelCatalog(buildModelHubCardsFromIds(modelIds));
+      } catch {
+        if (isCancelled) return;
+        setModelCatalog(buildModelHubCardsFromIds([]));
+      }
+    };
+    void loadOpenRouterModels();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   // Load assets
   useEffect(() => {

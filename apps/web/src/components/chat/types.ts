@@ -49,6 +49,12 @@ export type ChatAttachment = {
 
 export type ComposerMode = "fast" | "deep" | "none";
 
+export type BranchSeedPayload = {
+  question: string;
+  answer: string;
+  answerModel?: string;
+};
+
 export type ExecutionPlan = {
   runId: string;
   question: string;
@@ -71,6 +77,10 @@ export type MultiModelRun = {
   runId: string;
   queryText: string;
   status: "running" | "complete" | "error" | "cancelled";
+  progressPhase?: "models" | "aggregating" | "complete" | "error" | "cancelled";
+  progressPercent?: number;
+  isRetrying?: boolean;
+  aggregationStartedAt?: number;
   selectedModels: string[];
   resultsByModel: Record<string, ModelResult>;
   aggregated?: AggregatedResult;

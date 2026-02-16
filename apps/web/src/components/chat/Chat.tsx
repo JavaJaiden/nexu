@@ -8,6 +8,7 @@ import CompareOverlay from "./CompareOverlay";
 import Composer from "./Composer";
 import Timeline from "./Timeline";
 import type {
+  BranchSeedPayload,
   ChatEntry,
   ChatMessage,
   ComposerMode,
@@ -24,7 +25,7 @@ import type {
 const DEFAULT_MULTI_MODELS = ["Nexus-Core", "Nexus-Math", "Nexus-Write"];
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_CONTEXT_CHARS = 6000;
-const BRANCH_DRAFT_KEY = "nexus_studio_branch_draft";
+const MODEL_PHASE_PROGRESS_MAX = 80;
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 1600;
 const TASK_SUGGESTION_SEEDS: Record<SuggestionTask, string[]> = {
@@ -62,7 +63,8 @@ interface ChatContainerProps {
   toolOverridesByIndex?: Array<any>;
   onSaveTranscript?: (payload: SaveTranscriptPayload) => void;
   readOnly?: boolean;
-  onRequestNewChat?: () => void;
+  onRequestNewChat?: (seed?: BranchSeedPayload) => void;
+  seededFromBranch?: boolean;
   onModeChange?: (mode: ComposerMode) => void;
   onToggleSteps?: () => void;
   onToggleCitations?: () => void;
@@ -88,6 +90,7 @@ export default function Chat({
   onSaveTranscript,
   readOnly = false,
   onRequestNewChat,
+  seededFromBranch = false,
   onModeChange,
   onToggleSteps,
   onToggleCitations,
@@ -98,7 +101,7 @@ export default function Chat({
   const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
   const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
   const [timeline, setTimeline] = useState<ChatEntry[]>(initialTimeline ?? []);
-  const [runs, setRuns] = useState<MultiModelRun[]>([]);
+  const [runs, setRunsState] = useState<MultiModelRun[]>([]);
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
   const [compareSelected, setCompareSelected] = useState<string[]>([]);
 
@@ -110,25 +113,28 @@ export default function Chat({
   const hasInitializedSaveRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
 
-  // Keep runs ref in sync
-  useEffect(() => {
-    runsRef.current = runs;
-  }, [runs]);
+  const setRuns = useCallback(
+    (updater: MultiModelRun[] | ((prev: MultiModelRun[]) => MultiModelRun[])) => {
+      setRunsState((prev) => {
+        const next =
+          typeof updater === "function"
+            ? (updater as (prev: MultiModelRun[]) => MultiModelRun[])(prev)
+            : updater;
+        runsRef.current = next;
+        return next;
+      });
+    },
+    []
+  );
 
   const hasRunningRun = runs.some((r) => r.status === "running");
   const isBusy = hasRunningRun;
 
   useEffect(() => {
-    if (readOnly) return;
-    try {
-      const draft = window.sessionStorage.getItem(BRANCH_DRAFT_KEY);
-      if (!draft) return;
-      setInput(draft);
-      window.sessionStorage.removeItem(BRANCH_DRAFT_KEY);
-    } catch {
-      // Ignore session storage failures.
-    }
-  }, [readOnly]);
+    if (!seededFromBranch) return;
+    hasInitializedSaveRef.current = true;
+    lastSavedSignatureRef.current = null;
+  }, [seededFromBranch, chatId]);
 
   // Initialize timeline and reconstruct runs from props (for loading history)
   useEffect(() => {
@@ -213,6 +219,9 @@ export default function Chat({
           runId,
           queryText: lastUserQuestion || msg.content || "",
           status: "complete",
+          progressPhase: "complete",
+          progressPercent: 100,
+          isRetrying: false,
           selectedModels,
           resultsByModel,
           aggregated: aggregateSolve
@@ -257,7 +266,7 @@ export default function Chat({
         setRuns(reconstructedRuns);
       }
     }
-  }, [initialTimeline, toolOverrides, toolOverridesByIndex]);
+  }, [initialTimeline, toolOverrides, toolOverridesByIndex, setRuns]);
 
   const effectiveModels = useMemo(() => {
     const unique = Array.from(new Set(preferredModels.filter(Boolean)));
@@ -340,7 +349,7 @@ export default function Chat({
     (runId: string, updater: (run: MultiModelRun) => MultiModelRun) => {
       setRuns((prev) => prev.map((r) => (r.id === runId ? updater(r) : r)));
     },
-    []
+    [setRuns]
   );
 
   const getCounts = useCallback(
@@ -354,6 +363,16 @@ export default function Chat({
         },
         { total, complete: 0, failed: 0, cancelled: 0 }
       );
+    },
+    []
+  );
+
+  const getModelPhaseProgress = useCallback(
+    (counts: { total: number; complete: number; failed: number; cancelled: number }) => {
+      if (counts.total <= 0) return 0;
+      const settled = counts.complete + counts.failed + counts.cancelled;
+      const ratio = Math.min(1, Math.max(0, settled / counts.total));
+      return Math.round(ratio * MODEL_PHASE_PROGRESS_MAX);
     },
     []
   );
@@ -435,6 +454,7 @@ export default function Chat({
           status: "running",
         };
       });
+      const finalResults: Record<string, ModelResult> = { ...initialResults };
 
       // Create run
       const run: MultiModelRun = {
@@ -442,6 +462,9 @@ export default function Chat({
         runId,
         queryText: question,
         status: "running",
+        progressPhase: "models",
+        progressPercent: 0,
+        isRetrying: false,
         selectedModels: modelIds,
         resultsByModel: initialResults,
         executionPlan: plan,
@@ -494,42 +517,56 @@ export default function Chat({
             signal: controller.signal,
             attachments: plan.attachments,
           });
+          const nextResult: ModelResult = {
+            modelId,
+            status: "complete",
+            latencyMs: result.latencyMs,
+            tokensIn: result.tokensIn,
+            tokensOut: result.tokensOut,
+            text: result.text,
+            steps: result.steps,
+            confidence: result.confidence,
+            citations: result.citations,
+            selectionReason: result.selectionReason,
+            gatewayNote: result.gatewayNote,
+            usedModel: result.usedModel,
+          };
+          finalResults[modelId] = nextResult;
 
           updateRun(runId, (prevRun) => {
             const nextResults = {
               ...prevRun.resultsByModel,
-              [modelId]: {
-                modelId,
-                status: "complete" as const,
-                latencyMs: result.latencyMs,
-                tokensIn: result.tokensIn,
-                tokensOut: result.tokensOut,
-                text: result.text,
-                steps: result.steps,
-                confidence: result.confidence,
-                citations: result.citations,
-                selectionReason: result.selectionReason,
-                gatewayNote: result.gatewayNote,
-                usedModel: result.usedModel,
-              },
+              [modelId]: nextResult,
             };
             const counts = getCounts(nextResults, modelIds.length);
-            return { ...prevRun, resultsByModel: nextResults, counts };
+            return {
+              ...prevRun,
+              resultsByModel: nextResults,
+              counts,
+              progressPhase: "models",
+              progressPercent: getModelPhaseProgress(counts),
+            };
           });
         } catch (error) {
+          const nextResult: ModelResult = {
+            modelId,
+            status: controller.signal.aborted ? "cancelled" : "error",
+            errorMessage: (error as Error)?.message ?? "Model failed",
+          };
+          finalResults[modelId] = nextResult;
           updateRun(runId, (prevRun) => {
             const nextResults = {
               ...prevRun.resultsByModel,
-              [modelId]: {
-                modelId,
-                status: controller.signal.aborted
-                  ? ("cancelled" as const)
-                  : ("error" as const),
-                errorMessage: (error as Error)?.message ?? "Model failed",
-              },
+              [modelId]: nextResult,
             };
             const counts = getCounts(nextResults, modelIds.length);
-            return { ...prevRun, resultsByModel: nextResults, counts };
+            return {
+              ...prevRun,
+              resultsByModel: nextResults,
+              counts,
+              progressPhase: "models",
+              progressPercent: getModelPhaseProgress(counts),
+            };
           });
         }
       });
@@ -537,36 +574,79 @@ export default function Chat({
       // Wait for all models
       Promise.allSettled(tasks).then(async () => {
         const currentRun = runsRef.current.find((r) => r.id === runId);
-        if (!currentRun) return;
+        if (!currentRun) {
+          runControllersRef.current.delete(runId);
+          return;
+        }
+        if (currentRun.status === "cancelled") {
+          runControllersRef.current.delete(runId);
+          return;
+        }
 
-        const successful = Object.values(currentRun.resultsByModel).filter(
-          (r): r is ModelResult & { text: string } =>
-            r.status === "complete" && !!r.text
+        const finalized = modelIds.map((id) => finalResults[id]).filter(Boolean);
+        const successful = finalized.filter(
+          (result): result is ModelResult & { text: string } =>
+            result.status === "complete" && Boolean(result.text)
         );
+        const cancelledCount = finalized.filter(
+          (result) => result.status === "cancelled"
+        ).length;
 
         if (successful.length > 0) {
-          const aggregate = await runAggregator({
-            question,
-            results: successful.map((r) => ({
-              modelId: r.modelId,
-              text: r.text,
-            })),
-            aggregatorModel: plan.aggregatorId,
-            temperature: plan.temperature,
-            maxTokens: plan.maxTokens,
-            attachments: plan.attachments,
-          });
-
           updateRun(runId, (prevRun) => ({
             ...prevRun,
-            status: "complete",
-            aggregated: aggregate,
-            timings: { ...prevRun.timings, endAt: Date.now() },
+            progressPhase: "aggregating",
+            progressPercent: Math.max(prevRun.progressPercent ?? 0, 85),
+            aggregationStartedAt: Date.now(),
           }));
+          try {
+            const aggregate = await runAggregator({
+              question,
+              results: successful.map((r) => ({
+                modelId: r.modelId,
+                text: r.text,
+              })),
+              aggregatorModel: plan.aggregatorId,
+              temperature: plan.temperature,
+              maxTokens: plan.maxTokens,
+              attachments: plan.attachments,
+            });
+
+            updateRun(runId, (prevRun) => ({
+              ...prevRun,
+              status: "complete",
+              progressPhase: "complete",
+              progressPercent: 100,
+              isRetrying: false,
+              aggregationStartedAt: undefined,
+              aggregated: aggregate,
+              timings: { ...prevRun.timings, endAt: Date.now() },
+            }));
+          } catch {
+            updateRun(runId, (prevRun) => ({
+              ...prevRun,
+              status: "error",
+              progressPhase: "error",
+              progressPercent: 100,
+              isRetrying: false,
+              aggregationStartedAt: undefined,
+              timings: { ...prevRun.timings, endAt: Date.now() },
+            }));
+          }
         } else {
           updateRun(runId, (prevRun) => ({
             ...prevRun,
-            status: "error",
+            status:
+              cancelledCount === modelIds.length && modelIds.length > 0
+                ? "cancelled"
+                : "error",
+            progressPhase:
+              cancelledCount === modelIds.length && modelIds.length > 0
+                ? "cancelled"
+                : "error",
+            progressPercent: 100,
+            isRetrying: false,
+            aggregationStartedAt: undefined,
             timings: { ...prevRun.timings, endAt: Date.now() },
           }));
         }
@@ -584,6 +664,7 @@ export default function Chat({
       showSteps,
       updateRun,
       getCounts,
+      getModelPhaseProgress,
       onAttachmentsChange,
       buildContextMessages,
     ]
@@ -609,6 +690,10 @@ export default function Chat({
         updateRun(run.id, (prevRun) => ({
           ...prevRun,
           status: "cancelled",
+          progressPhase: "cancelled",
+          progressPercent: 100,
+          isRetrying: false,
+          aggregationStartedAt: undefined,
           timings: { ...prevRun.timings, endAt: Date.now() },
         }));
       }
@@ -711,6 +796,15 @@ export default function Chat({
       const runMaxTokens = run.executionPlan.maxTokens ?? maxTokens;
       const runAttachments = run.executionPlan.attachments ?? [];
       const stepsMode = showSteps ? "detailed" : "brief";
+      const finalResults: Record<string, ModelResult> = {
+        ...run.resultsByModel,
+      };
+      targetModelIds.forEach((modelId) => {
+        finalResults[modelId] = {
+          modelId,
+          status: "running",
+        };
+      });
 
       updateRun(runId, (prevRun) => {
         const nextResults = { ...prevRun.resultsByModel };
@@ -720,12 +814,17 @@ export default function Chat({
             status: "running",
           };
         });
+        const counts = getCounts(nextResults, prevRun.selectedModels.length);
         return {
           ...prevRun,
           status: "running",
+          progressPhase: "models",
+          progressPercent: getModelPhaseProgress(counts),
+          isRetrying: true,
+          aggregationStartedAt: undefined,
           aggregated: undefined,
           resultsByModel: nextResults,
-          counts: getCounts(nextResults, prevRun.selectedModels.length),
+          counts,
           timings: { startAt: Date.now() },
         };
       });
@@ -748,47 +847,57 @@ export default function Chat({
             signal: controller.signal,
             attachments: runAttachments,
           });
+          const nextResult: ModelResult = {
+            modelId,
+            status: "complete",
+            latencyMs: result.latencyMs,
+            tokensIn: result.tokensIn,
+            tokensOut: result.tokensOut,
+            text: result.text,
+            steps: result.steps,
+            confidence: result.confidence,
+            citations: result.citations,
+            selectionReason: result.selectionReason,
+            gatewayNote: result.gatewayNote,
+            usedModel: result.usedModel,
+          };
+          finalResults[modelId] = nextResult;
 
           updateRun(runId, (prevRun) => {
             const nextResults = {
               ...prevRun.resultsByModel,
-              [modelId]: {
-                modelId,
-                status: "complete" as const,
-                latencyMs: result.latencyMs,
-                tokensIn: result.tokensIn,
-                tokensOut: result.tokensOut,
-                text: result.text,
-                steps: result.steps,
-                confidence: result.confidence,
-                citations: result.citations,
-                selectionReason: result.selectionReason,
-                gatewayNote: result.gatewayNote,
-                usedModel: result.usedModel,
-              },
+              [modelId]: nextResult,
             };
+            const counts = getCounts(nextResults, prevRun.selectedModels.length);
             return {
               ...prevRun,
               resultsByModel: nextResults,
-              counts: getCounts(nextResults, prevRun.selectedModels.length),
+              counts,
+              progressPhase: "models",
+              progressPercent: getModelPhaseProgress(counts),
+              isRetrying: true,
             };
           });
         } catch (error) {
+          const nextResult: ModelResult = {
+            modelId,
+            status: controller.signal.aborted ? "cancelled" : "error",
+            errorMessage: (error as Error)?.message ?? "Model failed",
+          };
+          finalResults[modelId] = nextResult;
           updateRun(runId, (prevRun) => {
             const nextResults = {
               ...prevRun.resultsByModel,
-              [modelId]: {
-                modelId,
-                status: controller.signal.aborted
-                  ? ("cancelled" as const)
-                  : ("error" as const),
-                errorMessage: (error as Error)?.message ?? "Model failed",
-              },
+              [modelId]: nextResult,
             };
+            const counts = getCounts(nextResults, prevRun.selectedModels.length);
             return {
               ...prevRun,
               resultsByModel: nextResults,
-              counts: getCounts(nextResults, prevRun.selectedModels.length),
+              counts,
+              progressPhase: "models",
+              progressPercent: getModelPhaseProgress(counts),
+              isRetrying: true,
             };
           });
         }
@@ -801,43 +910,94 @@ export default function Chat({
         runControllersRef.current.delete(runId);
         return;
       }
+      if (currentRun.status === "cancelled") {
+        runControllersRef.current.delete(runId);
+        return;
+      }
 
       const successful = currentRun.selectedModels
-        .map((modelId) => currentRun.resultsByModel[modelId])
+        .map((modelId) => finalResults[modelId] ?? currentRun.resultsByModel[modelId])
         .filter((result): result is ModelResult & { text: string } => {
           return Boolean(result && result.status === "complete" && result.text);
         });
+      const cancelledCount = currentRun.selectedModels
+        .map((modelId) => finalResults[modelId] ?? currentRun.resultsByModel[modelId])
+        .filter((result) => result?.status === "cancelled").length;
 
       if (successful.length > 0) {
-        const aggregate = await runAggregator({
-          question,
-          results: successful.map((result) => ({
-            modelId: result.modelId,
-            text: result.text,
-          })),
-          aggregatorModel: currentRun.executionPlan.aggregatorId,
-          temperature: runTemperature,
-          maxTokens: runMaxTokens,
-          attachments: runAttachments,
-        });
-
         updateRun(runId, (prevRun) => ({
           ...prevRun,
-          status: "complete",
-          aggregated: aggregate,
-          timings: { ...prevRun.timings, endAt: Date.now() },
+          progressPhase: "aggregating",
+          progressPercent: Math.max(prevRun.progressPercent ?? 0, 85),
+          aggregationStartedAt: Date.now(),
+          isRetrying: true,
         }));
+        try {
+          const aggregate = await runAggregator({
+            question,
+            results: successful.map((result) => ({
+              modelId: result.modelId,
+              text: result.text,
+            })),
+            aggregatorModel: currentRun.executionPlan.aggregatorId,
+            temperature: runTemperature,
+            maxTokens: runMaxTokens,
+            attachments: runAttachments,
+          });
+
+          updateRun(runId, (prevRun) => ({
+            ...prevRun,
+            status: "complete",
+            progressPhase: "complete",
+            progressPercent: 100,
+            isRetrying: false,
+            aggregationStartedAt: undefined,
+            aggregated: aggregate,
+            timings: { ...prevRun.timings, endAt: Date.now() },
+          }));
+        } catch {
+          updateRun(runId, (prevRun) => ({
+            ...prevRun,
+            status: "error",
+            progressPhase: "error",
+            progressPercent: 100,
+            isRetrying: false,
+            aggregationStartedAt: undefined,
+            timings: { ...prevRun.timings, endAt: Date.now() },
+          }));
+        }
       } else {
         updateRun(runId, (prevRun) => ({
           ...prevRun,
-          status: "error",
+          status:
+            cancelledCount === currentRun.selectedModels.length &&
+            currentRun.selectedModels.length > 0
+              ? "cancelled"
+              : "error",
+          progressPhase:
+            cancelledCount === currentRun.selectedModels.length &&
+            currentRun.selectedModels.length > 0
+              ? "cancelled"
+              : "error",
+          progressPercent: 100,
+          isRetrying: false,
+          aggregationStartedAt: undefined,
           timings: { ...prevRun.timings, endAt: Date.now() },
         }));
       }
 
       runControllersRef.current.delete(runId);
     },
-    [readOnly, mode, temperature, maxTokens, showSteps, updateRun, getCounts]
+    [
+      readOnly,
+      mode,
+      temperature,
+      maxTokens,
+      showSteps,
+      updateRun,
+      getCounts,
+      getModelPhaseProgress,
+    ]
   );
 
   const handleRetryModel = useCallback(
@@ -856,42 +1016,79 @@ export default function Chat({
     [retryRunModels]
   );
 
-  const branchWithText = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
+  const branchWithSeed = useCallback(
+    (seed: BranchSeedPayload) => {
+      const question = seed.question.trim();
+      const answer = seed.answer.trim();
+      if (!question || !answer) return;
 
       if (onRequestNewChat) {
-        try {
-          window.sessionStorage.setItem(BRANCH_DRAFT_KEY, trimmed);
-        } catch {
-          // Ignore session storage failures.
-        }
-        onRequestNewChat();
+        onRequestNewChat({
+          question,
+          answer,
+          answerModel: seed.answerModel,
+        });
         return;
       }
 
-      setInput(trimmed);
+      const userMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: question,
+      };
+      const assistantMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: answer,
+      };
+      setRuns([]);
+      setTimeline([
+        { kind: "message", message: userMessage },
+        { kind: "message", message: assistantMessage },
+      ]);
+      setInput("");
+      setCompareRunId(null);
+      setCompareSelected([]);
+      onAttachmentsChange([]);
+      hasInitializedSaveRef.current = true;
+      lastSavedSignatureRef.current = null;
     },
-    [onRequestNewChat]
+    [onRequestNewChat, onAttachmentsChange, setRuns]
   );
 
   const handleBranchModel = useCallback(
     (runId: string, modelId: string) => {
       const run = runsRef.current.find((item) => item.id === runId);
-      const text = run?.resultsByModel[modelId]?.text ?? "";
-      branchWithText(text);
+      if (!run) return;
+      const question = run.queryText.trim();
+      const answer = run.resultsByModel[modelId]?.text?.trim() ?? "";
+      if (!question || !answer) return;
+      branchWithSeed({
+        question,
+        answer,
+        answerModel: modelNameMap.get(modelId) ?? modelId,
+      });
     },
-    [branchWithText]
+    [branchWithSeed, modelNameMap]
   );
 
   const handleBranchAggregated = useCallback(
     (runId: string) => {
       const run = runsRef.current.find((item) => item.id === runId);
-      const text = run?.aggregated?.text ?? "";
-      branchWithText(text);
+      if (!run) return;
+      const question = run.queryText.trim();
+      const answer = run.aggregated?.text?.trim() ?? "";
+      if (!question || !answer) return;
+      const aggregatorId = run.executionPlan.aggregatorId;
+      branchWithSeed({
+        question,
+        answer,
+        answerModel: aggregatorId
+          ? (modelNameMap.get(aggregatorId) ?? aggregatorId)
+          : "Aggregator",
+      });
     },
-    [branchWithText]
+    [branchWithSeed, modelNameMap]
   );
 
   const compareRun = compareRunId
@@ -1065,7 +1262,7 @@ export default function Chat({
               backgroundColor="$color"
               color="$background"
               borderRadius="$md"
-              onPress={onRequestNewChat}
+              onPress={() => onRequestNewChat()}
             >
               New Chat
             </Button>

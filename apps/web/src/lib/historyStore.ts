@@ -60,7 +60,8 @@ export type HistoryEntry = {
   createdAt: string;
 };
 
-const STORAGE_KEY = "nexus_history_v1";
+export const STORAGE_KEY = "nexus_history_v1";
+export const MAX_HISTORY_ENTRIES = 200;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function normalizeTranscriptItem(raw: any): TranscriptItem | null {
@@ -188,18 +189,62 @@ function normalizeEntry(raw: any): HistoryEntry | null {
   };
 }
 
+function sortHistoryEntries(entries: HistoryEntry[]) {
+  return [...entries].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+function pickMostCompleteEntry(a: HistoryEntry, b: HistoryEntry) {
+  if (a.transcript.length !== b.transcript.length) {
+    return b.transcript.length > a.transcript.length ? b : a;
+  }
+  const aCreatedAt = new Date(a.createdAt).getTime();
+  const bCreatedAt = new Date(b.createdAt).getTime();
+  if (Number.isFinite(aCreatedAt) && Number.isFinite(bCreatedAt)) {
+    return bCreatedAt >= aCreatedAt ? b : a;
+  }
+  return b;
+}
+
+export function normalizeHistoryEntries(raw: unknown): HistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const normalized = raw
+    .map((entry) => normalizeEntry(entry))
+    .filter((entry): entry is HistoryEntry => Boolean(entry))
+    .filter(isWithinLast30Days);
+  return sortHistoryEntries(normalized).slice(0, MAX_HISTORY_ENTRIES);
+}
+
+export function mergeHistoryEntries(
+  ...entryGroups: Array<HistoryEntry[] | undefined>
+) {
+  const byId = new Map<string, HistoryEntry>();
+  entryGroups.forEach((entries) => {
+    entries?.forEach((entry) => {
+      const normalized = normalizeEntry(entry);
+      if (!normalized || !isWithinLast30Days(normalized)) return;
+      const existing = byId.get(normalized.id);
+      if (!existing) {
+        byId.set(normalized.id, normalized);
+        return;
+      }
+      byId.set(normalized.id, pickMostCompleteEntry(existing, normalized));
+    });
+  });
+  return sortHistoryEntries(Array.from(byId.values())).slice(
+    0,
+    MAX_HISTORY_ENTRIES
+  );
+}
+
 export function loadHistory(): HistoryEntry[] {
   if (typeof window === "undefined") return [];
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as unknown[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((entry) => normalizeEntry(entry))
-      .filter((entry): entry is HistoryEntry => Boolean(entry))
-      .filter(isWithinLast30Days)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const parsed = JSON.parse(raw) as unknown;
+    return normalizeHistoryEntries(parsed);
   } catch {
     return [];
   }
@@ -207,12 +252,13 @@ export function loadHistory(): HistoryEntry[] {
 
 export function saveHistory(entries: HistoryEntry[]) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+  const normalized = mergeHistoryEntries(entries);
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
 }
 
 export function addHistoryEntry(entry: HistoryEntry) {
   const entries = loadHistory();
-  const nextEntries = [entry, ...entries].slice(0, 200);
+  const nextEntries = mergeHistoryEntries([entry], entries);
   saveHistory(nextEntries);
   return nextEntries;
 }
@@ -234,7 +280,7 @@ export function upsertHistoryEntry(
     nextEntries.splice(existingIndex, 1, entry);
   }
 
-  const trimmedEntries = nextEntries.slice(0, 200);
+  const trimmedEntries = nextEntries.slice(0, MAX_HISTORY_ENTRIES);
   saveHistory(trimmedEntries);
   return trimmedEntries;
 }

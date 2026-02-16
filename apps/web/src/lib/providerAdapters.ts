@@ -73,6 +73,32 @@ export async function runModel({
   let selectionReason: string | undefined;
   let gatewayNote: string | undefined;
   let usedModel: string | undefined;
+  const toOutput = (): RunModelOutput => ({
+    text: finalText,
+    latencyMs,
+    steps,
+    confidence,
+    citations,
+    selectionReason,
+    gatewayNote,
+    usedModel,
+  });
+
+  const applyResultEvent = (payload: any) => {
+    finalText = payload.final ?? "";
+    latencyMs = payload.durationMs;
+    steps = Array.isArray(payload.steps) ? payload.steps : steps;
+    confidence =
+      typeof payload.confidence === "number" ? payload.confidence : confidence;
+    citations = Array.isArray(payload.citations) ? payload.citations : citations;
+    selectionReason =
+      typeof payload.selectionReason === "string"
+        ? payload.selectionReason
+        : selectionReason;
+    gatewayNote =
+      typeof payload.gatewayNote === "string" ? payload.gatewayNote : gatewayNote;
+    usedModel = typeof payload.usedModel === "string" ? payload.usedModel : usedModel;
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -85,19 +111,26 @@ export async function runModel({
       if (!trimmed) continue;
       const event = JSON.parse(trimmed) as { type: string; payload?: any };
       if (event.type === "result" && event.payload) {
-        finalText = event.payload.final ?? "";
-        latencyMs = event.payload.durationMs;
-        steps = Array.isArray(event.payload.steps) ? event.payload.steps : steps;
-        confidence = typeof event.payload.confidence === "number" ? event.payload.confidence : confidence;
-        citations = Array.isArray(event.payload.citations) ? event.payload.citations : citations;
-        selectionReason =
-          typeof event.payload.selectionReason === "string"
-            ? event.payload.selectionReason
-            : selectionReason;
-        gatewayNote =
-          typeof event.payload.gatewayNote === "string" ? event.payload.gatewayNote : gatewayNote;
-        usedModel = typeof event.payload.usedModel === "string" ? event.payload.usedModel : usedModel;
+        applyResultEvent(event.payload);
+        try {
+          await reader.cancel();
+        } catch {
+          // Ignore cancellation errors.
+        }
+        return toOutput();
       }
+    }
+  }
+
+  const trailing = buffer.trim();
+  if (trailing.length > 0) {
+    try {
+      const event = JSON.parse(trailing) as { type: string; payload?: any };
+      if (event.type === "result" && event.payload) {
+        applyResultEvent(event.payload);
+      }
+    } catch {
+      // Ignore malformed trailing event chunk.
     }
   }
 
@@ -105,16 +138,7 @@ export async function runModel({
     throw new Error("Empty model response");
   }
 
-  return {
-    text: finalText,
-    latencyMs,
-    steps,
-    confidence,
-    citations,
-    selectionReason,
-    gatewayNote,
-    usedModel,
-  };
+  return toOutput();
 }
 
 export type AggregatedResult = {

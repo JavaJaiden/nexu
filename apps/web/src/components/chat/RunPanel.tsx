@@ -24,6 +24,11 @@ import type { ModelResult, RunPanelProps } from "./types";
 
 type Reaction = "up" | "down" | null;
 
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function formatDuration(startAt: number, endAt?: number): string {
   if (!endAt) return "Running...";
   const ms = endAt - startAt;
@@ -106,6 +111,51 @@ function ProgressBar({
           </Text>
         )}
       </XStack>
+    </YStack>
+  );
+}
+
+function StageMeter({
+  label,
+  percent,
+  tone = "primary",
+}: {
+  label: string;
+  percent: number;
+  tone?: "primary" | "aggregate";
+}) {
+  const normalized = clampPercent(percent);
+  const barColor = tone === "aggregate" ? "#22C55E" : "var(--colorColor)";
+
+  return (
+    <YStack gap={6}>
+      <XStack justifyContent="space-between" alignItems="center">
+        <Text fontSize={11} color="$textMuted">
+          {label}
+        </Text>
+        <Text fontSize={11} color="$textMuted" fontWeight="600">
+          {normalized}%
+        </Text>
+      </XStack>
+      <div
+        style={{
+          width: "100%",
+          height: 8,
+          borderRadius: 999,
+          overflow: "hidden",
+          backgroundColor: "var(--backgroundSecondary)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <div
+          style={{
+            width: `${normalized}%`,
+            height: "100%",
+            backgroundColor: barColor,
+            transition: "width 220ms ease",
+          }}
+        />
+      </div>
     </YStack>
   );
 }
@@ -444,6 +494,9 @@ function ModelAnswerCard({
 function AggregatedCard({
   text,
   isLoading,
+  phase,
+  progressPercent,
+  stageLabel,
   confidence,
   onCopy,
   onRetryAll,
@@ -457,6 +510,9 @@ function AggregatedCard({
 }: {
   text?: string;
   isLoading: boolean;
+  phase: "models" | "aggregating" | "complete" | "error" | "cancelled";
+  progressPercent: number;
+  stageLabel: string;
   confidence?: number;
   onCopy: () => void;
   onRetryAll: () => void;
@@ -507,8 +563,18 @@ function AggregatedCard({
         </Text>
       ) : (
         <Text fontSize={14} color="$textMuted">
-          Combining insights from all models...
+          {phase === "aggregating"
+            ? "Synthesizing final response..."
+            : "Combining insights from all models..."}
         </Text>
+      )}
+
+      {isLoading && (
+        <StageMeter
+          label={stageLabel}
+          percent={progressPercent}
+          tone="aggregate"
+        />
       )}
 
       <XStack gap="$xs" flexWrap="wrap">
@@ -631,6 +697,58 @@ export default function RunPanel({
   >({});
   const [aggregatedReaction, setAggregatedReaction] = useState<Reaction>(null);
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
+  const [aggregationNow, setAggregationNow] = useState(() => Date.now());
+
+  const settledCount =
+    run.counts.complete + run.counts.failed + run.counts.cancelled;
+  const fallbackModelsProgress =
+    run.counts.total > 0
+      ? Math.round((settledCount / run.counts.total) * 80)
+      : 0;
+  const phase =
+    run.progressPhase ??
+    (run.status === "running" ? "models" : run.status === "complete"
+      ? "complete"
+      : run.status === "cancelled"
+        ? "cancelled"
+        : "error");
+
+  useEffect(() => {
+    if (phase !== "aggregating") return;
+    const id = window.setInterval(() => {
+      setAggregationNow(Date.now());
+    }, 180);
+    return () => window.clearInterval(id);
+  }, [phase, run.id]);
+
+  const aggregationProgressPercent = useMemo(() => {
+    if (phase !== "aggregating") {
+      return phase === "complete" ? 100 : 0;
+    }
+    const startAt = run.aggregationStartedAt ?? run.timings.startAt;
+    const elapsedMs = Math.max(0, aggregationNow - startAt);
+    return Math.min(96, 12 + Math.round(elapsedMs / 120));
+  }, [phase, run.aggregationStartedAt, run.timings.startAt, aggregationNow]);
+
+  const overallProgressPercent = useMemo(() => {
+    if (phase === "complete" || phase === "error" || phase === "cancelled") {
+      return 100;
+    }
+    if (phase === "aggregating") {
+      return Math.min(99, 80 + Math.round((aggregationProgressPercent / 100) * 19));
+    }
+    return run.progressPercent ?? fallbackModelsProgress;
+  }, [phase, aggregationProgressPercent, run.progressPercent, fallbackModelsProgress]);
+
+  const progressLabel = useMemo(() => {
+    if (phase === "aggregating") return "Building aggregated response";
+    if (run.status !== "running") {
+      if (phase === "complete") return "Completed";
+      if (phase === "cancelled") return "Cancelled";
+      return "Finished";
+    }
+    return run.isRetrying ? "Retrying selected models" : "Running model stack";
+  }, [phase, run.status, run.isRetrying]);
 
   useEffect(() => {
     return () => {
@@ -698,7 +816,11 @@ export default function RunPanel({
             )}
             <Text fontSize={16} fontWeight="600" color="$color">
               {run.status === "running"
-                ? "Multi-Model Analysis"
+                ? phase === "aggregating"
+                  ? "Aggregating Response"
+                  : run.isRetrying
+                    ? "Retrying Analysis"
+                    : "Multi-Model Analysis"
                 : hasErrors
                   ? "Analysis Complete (Partial)"
                   : "Analysis Complete"}
@@ -720,7 +842,8 @@ export default function RunPanel({
             </XStack>
           </XStack>
           <Text fontSize={13} color="$textMuted">
-            {run.counts.complete} of {run.counts.total} models responded •{" "}
+            {progressLabel} • {run.counts.complete} of {run.counts.total} models
+            responded •{" "}
             {formatDuration(run.timings.startAt, run.timings.endAt)}
           </Text>
         </YStack>
@@ -759,9 +882,30 @@ export default function RunPanel({
         cancelled={run.counts.cancelled}
       />
 
+      <StageMeter label={progressLabel} percent={overallProgressPercent} />
+
+      {phase === "aggregating" && (
+        <StageMeter
+          label="Synthesizing aggregated response"
+          percent={aggregationProgressPercent}
+          tone="aggregate"
+        />
+      )}
+
       <AggregatedCard
         text={run.aggregated?.text}
         isLoading={run.status === "running"}
+        phase={phase}
+        progressPercent={
+          phase === "aggregating"
+            ? aggregationProgressPercent
+            : overallProgressPercent
+        }
+        stageLabel={
+          phase === "aggregating"
+            ? "Synthesizing aggregated response"
+            : progressLabel
+        }
         confidence={run.aggregated?.confidence}
         onCopy={onCopyAggregated}
         onRetryAll={onRetryAll}

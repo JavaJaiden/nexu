@@ -3,6 +3,7 @@
 import {
   BookText,
   Brain,
+  ExternalLink,
   FileText as FileTextIcon,
   ImagePlus,
   ListChecks,
@@ -53,18 +54,61 @@ function hasDraggedFiles(dataTransfer: DataTransfer | null | undefined) {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
-function AttachmentChip({
-  attachment,
-  onRemove,
-}: {
-  attachment: PdfAttachment;
-  onRemove: () => void;
-}) {
-  const isImage =
+function isImageAttachment(attachment: PdfAttachment) {
+  return (
     attachment.type.startsWith("image/") ||
     /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|webp)$/i.test(
       attachment.name
-    );
+    )
+  );
+}
+
+function isPdfAttachment(attachment: PdfAttachment) {
+  return (
+    attachment.type === "application/pdf" ||
+    attachment.name.toLowerCase().endsWith(".pdf")
+  );
+}
+
+function isTextAttachment(attachment: PdfAttachment) {
+  const type = attachment.type.toLowerCase();
+  if (type.startsWith("text/")) return true;
+  if (
+    type.includes("json") ||
+    type.includes("xml") ||
+    type.includes("javascript") ||
+    type.includes("typescript")
+  ) {
+    return true;
+  }
+  return /\.(txt|md|markdown|csv|json|xml|ya?ml|log|js|jsx|ts|tsx|py|java|c|cc|cpp|h|hpp|go|rs|rb|php|html?|css|sql)$/i.test(
+    attachment.name
+  );
+}
+
+function decodeAttachmentText(base64: string) {
+  const binary = window.atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+type AttachmentPreviewState = {
+  attachment: PdfAttachment;
+  dataUrl: string;
+  kind: "image" | "pdf" | "text" | "file";
+  textContent?: string;
+};
+
+function AttachmentChip({
+  attachment,
+  onPreview,
+  onRemove,
+}: {
+  attachment: PdfAttachment;
+  onPreview: () => void;
+  onRemove: () => void;
+}) {
+  const isImage = isImageAttachment(attachment);
   const previewSrc = useMemo(
     () =>
       isImage
@@ -93,31 +137,50 @@ function AttachmentChip({
         overflow="hidden"
         position="relative"
       >
-        {isImage ? (
-          <Image
-            src={previewSrc}
-            alt={attachment.name}
-            fill
-            unoptimized
-            sizes="148px"
-            loading="lazy"
-            style={{
-              objectFit: "cover",
-            }}
-          />
-        ) : (
-          <YStack
-            alignItems="center"
-            justifyContent="center"
-            flex={1}
-            gap="$xs"
-          >
-            <FileTextIcon size={20} color="var(--colorTextMuted)" />
-            <Text fontSize={10} color="$textMuted" fontWeight="600">
-              {fileLabel.toUpperCase()}
-            </Text>
-          </YStack>
-        )}
+        <button
+          type="button"
+          onClick={onPreview}
+          aria-label={`Preview ${attachment.name}`}
+          style={{
+            width: "100%",
+            height: "100%",
+            border: "none",
+            padding: 0,
+            margin: 0,
+            background: "transparent",
+            cursor: "zoom-in",
+          }}
+        >
+          {isImage ? (
+            <Image
+              src={previewSrc}
+              alt={attachment.name}
+              fill
+              unoptimized
+              sizes="148px"
+              loading="lazy"
+              style={{
+                objectFit: "cover",
+              }}
+            />
+          ) : (
+            <YStack
+              alignItems="center"
+              justifyContent="center"
+              flex={1}
+              gap="$xs"
+              height="100%"
+            >
+              <FileTextIcon size={20} color="var(--colorTextMuted)" />
+              <Text fontSize={10} color="$textMuted" fontWeight="600">
+                {fileLabel.toUpperCase()}
+              </Text>
+              <Text fontSize={10} color="$textMuted">
+                Preview
+              </Text>
+            </YStack>
+          )}
+        </button>
         <Button
           size="$1"
           position="absolute"
@@ -126,6 +189,7 @@ function AttachmentChip({
           backgroundColor="rgba(0,0,0,0.55)"
           borderWidth={0}
           padding="$xs"
+          zIndex={2}
           onPress={onRemove}
           hoverStyle={{ backgroundColor: "rgba(0,0,0,0.68)" }}
           pressStyle={{ scale: 0.95 }}
@@ -133,9 +197,27 @@ function AttachmentChip({
           <X size={12} color="white" />
         </Button>
       </YStack>
-      <Text fontSize={11} color="$color" numberOfLines={1} maxWidth={136}>
-        {attachment.name}
-      </Text>
+      <XStack justifyContent="space-between" alignItems="center">
+        <Text fontSize={11} color="$color" numberOfLines={1} maxWidth={98}>
+          {attachment.name}
+        </Text>
+        <button
+          type="button"
+          onClick={onPreview}
+          style={{
+            border: "none",
+            padding: 0,
+            margin: 0,
+            background: "transparent",
+            color: "var(--colorTextMuted)",
+            fontSize: 11,
+            cursor: "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          Preview
+        </button>
+      </XStack>
       <Text fontSize={10} color="$textMuted" numberOfLines={1}>
         {attachment.type || "file"}
       </Text>
@@ -180,6 +262,8 @@ export default function Composer({
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<SuggestionTask | null>(null);
+  const [attachmentPreview, setAttachmentPreview] =
+    useState<AttachmentPreviewState | null>(null);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -254,6 +338,25 @@ export default function Composer({
     };
   }, [plusMenuOpen, suggestionsOpen, settingsOpen]);
 
+  useEffect(() => {
+    if (!attachmentPreview) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAttachmentPreview(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [attachmentPreview]);
+
   const handleSendPress = useCallback(() => {
     if (isDictating) {
       stopDictation();
@@ -288,6 +391,57 @@ export default function Composer({
     setSuggestionsOpen(menu === "suggestions" ? (open) => !open : false);
     setSettingsOpen(menu === "settings" ? (open) => !open : false);
   };
+
+  const handleOpenAttachmentPreview = useCallback((attachment: PdfAttachment) => {
+    const dataUrl = `data:${attachment.type || "application/octet-stream"};base64,${attachment.data}`;
+    const isImage = isImageAttachment(attachment);
+    const isPdf = isPdfAttachment(attachment);
+    const isText = isTextAttachment(attachment);
+
+    if (isImage) {
+      setAttachmentPreview({
+        attachment,
+        dataUrl,
+        kind: "image",
+      });
+      return;
+    }
+
+    if (isPdf) {
+      setAttachmentPreview({
+        attachment,
+        dataUrl,
+        kind: "pdf",
+      });
+      return;
+    }
+
+    if (isText) {
+      try {
+        const content = decodeAttachmentText(attachment.data);
+        const maxChars = 12000;
+        const textContent =
+          content.length > maxChars
+            ? `${content.slice(0, maxChars)}\n\n… Preview truncated`
+            : content;
+        setAttachmentPreview({
+          attachment,
+          dataUrl,
+          kind: "text",
+          textContent,
+        });
+        return;
+      } catch {
+        // Fallback to generic preview when text decoding fails.
+      }
+    }
+
+    setAttachmentPreview({
+      attachment,
+      dataUrl,
+      kind: "file",
+    });
+  }, []);
 
   useEffect(() => {
     const node = dropZoneRef.current;
@@ -416,6 +570,7 @@ export default function Composer({
                   <AttachmentChip
                     key={`${attachment.name}-${index}`}
                     attachment={attachment}
+                    onPreview={() => handleOpenAttachmentPreview(attachment)}
                     onRemove={() => onRemoveAttachment(index)}
                   />
                 ))}
@@ -963,6 +1118,184 @@ export default function Composer({
           </XStack>
         </YStack>
       </div>
+
+      {attachmentPreview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Preview ${attachmentPreview.attachment.name}`}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Close attachment preview"
+            onClick={() => setAttachmentPreview(null)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              border: "none",
+              padding: 0,
+              backgroundColor: "rgba(0,0,0,0.8)",
+              cursor: "default",
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(94vw, 1080px)",
+              height: "min(88vh, 880px)",
+              background: "var(--background)",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              overflow: "hidden",
+              zIndex: 2,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <XStack
+              alignItems="center"
+              justifyContent="space-between"
+              gap="$sm"
+              padding="$sm"
+              borderBottomWidth={1}
+              borderColor="$border"
+              backgroundColor="$backgroundSecondary"
+            >
+              <YStack gap={2} minWidth={0} flex={1}>
+                <Text fontSize={13} fontWeight="600" color="$color" numberOfLines={1}>
+                  {attachmentPreview.attachment.name}
+                </Text>
+                <Text fontSize={11} color="$textMuted" numberOfLines={1}>
+                  {attachmentPreview.attachment.type || "file"}
+                </Text>
+              </YStack>
+              <XStack alignItems="center" gap="$xs">
+                <a
+                  href={attachmentPreview.dataUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    textDecoration: "none",
+                    color: "var(--color)",
+                    fontSize: 12,
+                  }}
+                >
+                  <ExternalLink size={12} />
+                  Open
+                </a>
+                <a
+                  href={attachmentPreview.dataUrl}
+                  download={attachmentPreview.attachment.name}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    textDecoration: "none",
+                    color: "var(--color)",
+                    fontSize: 12,
+                  }}
+                >
+                  Download
+                </a>
+                <Button
+                  size="$2"
+                  backgroundColor="transparent"
+                  borderWidth={1}
+                  borderColor="$border"
+                  onPress={() => setAttachmentPreview(null)}
+                >
+                  Close
+                </Button>
+              </XStack>
+            </XStack>
+
+            <div
+              style={{
+                position: "relative",
+                flex: 1,
+                backgroundColor: "var(--background)",
+              }}
+            >
+              {attachmentPreview.kind === "image" && (
+                <Image
+                  src={attachmentPreview.dataUrl}
+                  alt={attachmentPreview.attachment.name}
+                  fill
+                  unoptimized
+                  priority
+                  sizes="94vw"
+                  style={{ objectFit: "contain" }}
+                />
+              )}
+
+              {attachmentPreview.kind === "pdf" && (
+                <iframe
+                  src={attachmentPreview.dataUrl}
+                  title={attachmentPreview.attachment.name}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    border: "none",
+                    backgroundColor: "white",
+                  }}
+                />
+              )}
+
+              {attachmentPreview.kind === "text" && (
+                <div
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    overflow: "auto",
+                    padding: 16,
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    whiteSpace: "pre-wrap",
+                    color: "var(--color)",
+                  }}
+                >
+                  {attachmentPreview.textContent}
+                </div>
+              )}
+
+              {attachmentPreview.kind === "file" && (
+                <YStack
+                  alignItems="center"
+                  justifyContent="center"
+                  gap="$sm"
+                  height="100%"
+                  padding="$lg"
+                >
+                  <FileTextIcon size={30} color="var(--colorTextMuted)" />
+                  <Text fontSize={14} color="$color" textAlign="center">
+                    Preview is not available for this file type in-app.
+                  </Text>
+                  <Text fontSize={12} color="$textMuted" textAlign="center">
+                    Use Open or Download to inspect the file before sending.
+                  </Text>
+                </YStack>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}
