@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import PhoneRequiredClient from "./PhoneRequiredClient";
+import PhoneRequiredClientDynamic from "./PhoneRequiredClientDynamic";
 
 export default function PhoneRequiredPage() {
   return (
     <Suspense fallback={null}>
-      <PhoneRequiredClient />
+      <PhoneRequiredClientDynamic />
     </Suspense>
   );
 }

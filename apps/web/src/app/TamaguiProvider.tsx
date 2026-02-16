@@ -7,7 +7,12 @@ import { ThemeSettingProvider, useThemeSetting } from "@/lib/themeContext";
 function TamaguiInner({ children }: { children: React.ReactNode }) {
   const { theme } = useThemeSetting();
   return (
-    <TamaguiProviderOG config={config} defaultTheme={theme}>
+    <TamaguiProviderOG 
+      config={config} 
+      defaultTheme={theme}
+      disableRootThemeClass
+      disableInjectCSS
+    >
       <Theme name={theme}>{children}</Theme>
     </TamaguiProviderOG>
   );

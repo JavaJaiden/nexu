@@ -17,10 +17,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link rel="stylesheet" href="/tamagui.css" />
-      </head>
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className} style={{ margin: 0, padding: 0 }}>
         <TamaguiProvider>
           <ConvexClientProvider>{children}</ConvexClientProvider>
