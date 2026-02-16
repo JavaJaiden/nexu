@@ -3,22 +3,15 @@
 import { UserProfile, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 
-// Dynamically import Tamagui components to avoid SSR issues
-import type { Button as ButtonType, Paragraph as ParagraphType, Text as TextType, YStack as YStackType } from "tamagui";
-
+// Use standard React elements instead of Tamagui to avoid SSR issues
 export default function PhoneRequiredClient() {
   const { isLoaded, userId } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [tamaguiComponents, setTamaguiComponents] = useState<{
-    Button: typeof ButtonType;
-    Paragraph: typeof ParagraphType;
-    Text: typeof TextType;
-    YStack: typeof YStackType;
-  } | null>(null);
-
+  const containerRef = useRef<HTMLDivElement>(null);
+  
   const nextPath = useMemo(() => {
     const returnTo = searchParams.get("returnTo");
     return typeof returnTo === "string" && returnTo.startsWith("/")
@@ -33,59 +26,85 @@ export default function PhoneRequiredClient() {
     }
   }, [isLoaded, userId, router]);
 
-  // Load Tamagui components on client side only
+  // Apply Tamagui theme classes to match the rest of the app
   useEffect(() => {
-    import("tamagui").then((mod) => {
-      setTamaguiComponents({
-        Button: mod.Button,
-        Paragraph: mod.Paragraph,
-        Text: mod.Text,
-        YStack: mod.YStack,
-      });
-    });
+    if (containerRef.current) {
+      const theme = document.documentElement.dataset.theme || "light";
+      containerRef.current.className = `t_${theme}`;
+    }
   }, []);
 
-  if (!isLoaded || !userId || !tamaguiComponents) {
+  if (!isLoaded || !userId) {
     return null;
   }
 
-  const { Button, Paragraph, Text, YStack } = tamaguiComponents;
-
   return (
-    <YStack
-      flex={1}
-      minHeight="100vh"
-      backgroundColor="$background"
-      alignItems="center"
-      justifyContent="center"
-      padding="$lg"
-      gap="$md"
+    <div
+      ref={containerRef}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: "100vh",
+        backgroundColor: "var(--background, #ffffff)",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "24px",
+        gap: "16px",
+      }}
     >
-      <Text fontSize={24} fontWeight="700" color="$color">
+      <h1
+        style={{
+          fontSize: "24px",
+          fontWeight: 700,
+          color: "var(--color, #000000)",
+          margin: 0,
+        }}
+      >
         Phone Number Required
-      </Text>
-      <Paragraph
-        fontSize={14}
-        color="$textMuted"
-        maxWidth={680}
-        textAlign="center"
+      </h1>
+      <p
+        style={{
+          fontSize: "14px",
+          color: "var(--textMuted, #666666)",
+          maxWidth: "680px",
+          textAlign: "center",
+          margin: 0,
+        }}
       >
         Add and verify a phone number to continue using Nexu.
-      </Paragraph>
+      </p>
 
-      <YStack
-        width="100%"
-        maxWidth={820}
-        borderWidth={1}
-        borderColor="$border"
-        borderRadius="$md"
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "820px",
+          borderWidth: "1px",
+          borderStyle: "solid",
+          borderColor: "var(--border, #e5e5e5)",
+          borderRadius: "10px",
+          overflow: "hidden",
+        }}
       >
         <UserProfile />
-      </YStack>
+      </div>
 
-      <Link href={nextPath}>
-        <Button size="$4">Continue</Button>
+      <Link
+        href={nextPath}
+        style={{
+          padding: "12px 24px",
+          backgroundColor: "var(--color, #000000)",
+          color: "var(--background, #ffffff)",
+          borderRadius: "8px",
+          textDecoration: "none",
+          fontSize: "16px",
+          fontWeight: 500,
+          cursor: "pointer",
+          border: "none",
+        }}
+      >
+        Continue
       </Link>
-    </YStack>
+    </div>
   );
 }
