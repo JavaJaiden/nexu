@@ -8,7 +8,6 @@ type OpenRouterModelRecord = {
   architecture?: {
     modality?: string;
   };
-  supported_parameters?: string[];
 };
 
 function normalizeBaseUrl(value: string) {
@@ -20,21 +19,6 @@ function isModelId(value: unknown): value is string {
     typeof value === "string" &&
     value.includes("/") &&
     value.trim().length > 0
-  );
-}
-
-function supportsPromptInput(model: OpenRouterModelRecord) {
-  const params = Array.isArray(model.supported_parameters)
-    ? model.supported_parameters
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.toLowerCase().trim())
-    : [];
-  if (params.length === 0) return true;
-  return params.some(
-    (param) =>
-      param.includes("messages") ||
-      param.includes("prompt") ||
-      param.includes("input")
   );
 }
 
@@ -101,7 +85,6 @@ export async function GET() {
     const modelIds = Array.from(
       new Set(
         records
-          .filter((record) => supportsPromptInput(record))
           .filter((record) => supportsTextOutput(record))
           .map((record) => record.id)
           .filter(isModelId)
