@@ -43,27 +43,13 @@ const baseOpenAIModels: GatewayModelSpec[] = [
   },
 ];
 
-const openaiAllowlist = new Set(
-  baseOpenAIModels
-    .map((model) => model.label)
-    .concat([
-      "gpt-3.5-turbo",
-      "gpt-3.5-turbo-instruct",
-      "gpt-4-turbo",
-      "o3",
-      "o3-mini",
-      "o3-pro",
-      "o4-mini",
-    ])
-);
-
 const registryModels: GatewayModelSpec[] = gatewayModelIds.map((id) => {
-  const [provider, modelKey] = id.split("/");
+  const [provider] = id.split("/");
   return {
     label: id,
     provider,
     modelId: id,
-    available: provider === "openai" ? openaiAllowlist.has(modelKey) : true,
+    available: true,
   };
 });
 

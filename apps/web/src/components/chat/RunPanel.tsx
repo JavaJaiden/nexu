@@ -1,26 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Text, XStack, YStack, Button } from "tamagui";
 import {
-  Loader2,
-  CheckCircle2,
   AlertTriangle,
-  Copy,
-  Clock,
-  Eye,
-  EyeOff,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Sparkles,
-  ThumbsUp,
-  ThumbsDown,
-  RotateCcw,
+  Clock,
+  Copy,
+  Eye,
+  EyeOff,
   GitBranch,
+  Loader2,
+  RotateCcw,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import type { RunPanelProps, ModelResult } from "./types";
+import { useEffect, useMemo, useState } from "react";
+import { Button, Text, XStack, YStack } from "tamagui";
+import type { ModelResult, RunPanelProps } from "./types";
 
 type Reaction = "up" | "down" | null;
 
@@ -65,10 +65,31 @@ function ProgressBar({
 
   return (
     <YStack gap="$xs">
-      <XStack height={6} borderRadius="$full" overflow="hidden" backgroundColor="$backgroundSecondary">
-        <YStack height="100%" width={`${completePct}%`} backgroundColor="$success" />
-        {failedPct > 0 && <YStack height="100%" width={`${failedPct}%`} backgroundColor="$orange10" />}
-        {cancelledPct > 0 && <YStack height="100%" width={`${cancelledPct}%`} backgroundColor="$gray8" />}
+      <XStack
+        height={6}
+        borderRadius="$full"
+        overflow="hidden"
+        backgroundColor="$backgroundSecondary"
+      >
+        <YStack
+          height="100%"
+          width={`${completePct}%`}
+          backgroundColor="$success"
+        />
+        {failedPct > 0 && (
+          <YStack
+            height="100%"
+            width={`${failedPct}%`}
+            backgroundColor="$orange10"
+          />
+        )}
+        {cancelledPct > 0 && (
+          <YStack
+            height="100%"
+            width={`${cancelledPct}%`}
+            backgroundColor="$gray8"
+          />
+        )}
       </XStack>
       <XStack justifyContent="space-between">
         <Text fontSize={11} color="$textMuted">
@@ -110,7 +131,11 @@ function ModelStackPill({
       backgroundColor={isAggregator ? "rgba(34, 197, 94, 0.1)" : "$background"}
     >
       {isAggregator && <Sparkles size={11} color="#22C55E" />}
-      <Text fontSize={11} fontWeight="600" color={isAggregator ? "$success" : "$color"}>
+      <Text
+        fontSize={11}
+        fontWeight="600"
+        color={isAggregator ? "$success" : "$color"}
+      >
         {label}
       </Text>
     </XStack>
@@ -152,8 +177,12 @@ function ModelAnswerCard({
 }) {
   const isError = result.status === "error" || result.status === "cancelled";
   const hasText = result.status === "complete" && Boolean(result.text?.trim());
-  const hasSteps = showSteps && Array.isArray(result.steps) && result.steps.length > 0;
-  const hasCitations = showCitations && Array.isArray(result.citations) && result.citations.length > 0;
+  const hasSteps =
+    showSteps && Array.isArray(result.steps) && result.steps.length > 0;
+  const hasCitations =
+    showCitations &&
+    Array.isArray(result.citations) &&
+    result.citations.length > 0;
   const hasMeta =
     typeof result.confidence === "number" ||
     Boolean(result.selectionReason) ||
@@ -161,7 +190,8 @@ function ModelAnswerCard({
     Boolean(result.tokensIn) ||
     Boolean(result.tokensOut) ||
     (result.usedModel && result.usedModel !== result.modelId);
-  const hasDetails = result.status === "complete" && (hasSteps || hasCitations || hasMeta);
+  const hasDetails =
+    result.status === "complete" && (hasSteps || hasCitations || hasMeta);
 
   return (
     <YStack
@@ -175,7 +205,12 @@ function ModelAnswerCard({
       borderColor={isError ? "$orange10" : "$border"}
       gap="$md"
     >
-      <XStack justifyContent="space-between" alignItems="center" gap="$sm" flexWrap="wrap">
+      <XStack
+        justifyContent="space-between"
+        alignItems="center"
+        gap="$sm"
+        flexWrap="wrap"
+      >
         <XStack alignItems="center" gap="$sm" flex={1}>
           <StatusIcon status={result.status} />
           <Text fontSize={15} fontWeight="600" color="$color">
@@ -220,7 +255,12 @@ function ModelAnswerCard({
       </XStack>
 
       {result.status === "complete" ? (
-        <Text fontSize={14} color="$color" lineHeight={1.6} whiteSpace="pre-wrap">
+        <Text
+          fontSize={14}
+          color="$color"
+          lineHeight={22}
+          whiteSpace="pre-wrap"
+        >
           {result.text ?? "No response"}
         </Text>
       ) : (
@@ -244,7 +284,9 @@ function ModelAnswerCard({
         </Button>
         <Button
           size="$1"
-          backgroundColor={reaction === "up" ? "rgba(34, 197, 94, 0.14)" : "transparent"}
+          backgroundColor={
+            reaction === "up" ? "rgba(34, 197, 94, 0.14)" : "transparent"
+          }
           borderWidth={1}
           borderColor={reaction === "up" ? "$success" : "$border"}
           color={reaction === "up" ? "$success" : "$color"}
@@ -255,7 +297,9 @@ function ModelAnswerCard({
         </Button>
         <Button
           size="$1"
-          backgroundColor={reaction === "down" ? "rgba(239, 68, 68, 0.14)" : "transparent"}
+          backgroundColor={
+            reaction === "down" ? "rgba(239, 68, 68, 0.14)" : "transparent"
+          }
           borderWidth={1}
           borderColor={reaction === "down" ? "$red10" : "$border"}
           color={reaction === "down" ? "$red10" : "$color"}
@@ -296,23 +340,47 @@ function ModelAnswerCard({
           opacity={hasText && canReadAloud ? 1 : 0.45}
           aria-label={isReading ? "Stop reading aloud" : "Read aloud"}
         >
-          {isReading ? <VolumeX size={13} color="currentColor" /> : <Volume2 size={13} color="currentColor" />}
+          {isReading ? (
+            <VolumeX size={13} color="currentColor" />
+          ) : (
+            <Volume2 size={13} color="currentColor" />
+          )}
         </Button>
       </XStack>
 
       {hasDetails && isExpanded && (
-        <YStack gap="$sm" paddingTop="$sm" borderTopWidth={1} borderColor="$border">
+        <YStack
+          gap="$sm"
+          paddingTop="$sm"
+          borderTopWidth={1}
+          borderColor="$border"
+        >
           {hasSteps && (
             <YStack gap="$xs">
               <Text fontSize={12} fontWeight="600" color="$textMuted">
                 Steps
               </Text>
-              {result.steps!.map((step, index) => (
-                <XStack key={index} gap="$sm" alignItems="flex-start">
-                  <Text fontSize={12} color="$textMuted" fontWeight="600" minWidth={20}>
-                    {index + 1}.
+              {result.steps?.map((step, stepIndex) => (
+                <XStack
+                  key={`${result.modelId}-step-${step}`}
+                  gap="$sm"
+                  alignItems="flex-start"
+                >
+                  <Text
+                    fontSize={12}
+                    color="$textMuted"
+                    fontWeight="600"
+                    minWidth={20}
+                  >
+                    {stepIndex + 1}.
                   </Text>
-                  <Text fontSize={13} color="$color" flex={1} lineHeight={1.5}>
+                  <Text
+                    fontSize={13}
+                    color="$color"
+                    flex={1}
+                    lineHeight={20}
+                    whiteSpace="pre-wrap"
+                  >
                     {step}
                   </Text>
                 </XStack>
@@ -325,8 +393,12 @@ function ModelAnswerCard({
               <Text fontSize={12} fontWeight="600" color="$textMuted">
                 Citations
               </Text>
-              {result.citations!.map((citation, index) => (
-                <Text key={index} fontSize={12} color="$textMuted">
+              {result.citations?.map((citation) => (
+                <Text
+                  key={`${result.modelId}-citation-${citation}`}
+                  fontSize={12}
+                  color="$textMuted"
+                >
                   • {citation}
                 </Text>
               ))}
@@ -359,7 +431,8 @@ function ModelAnswerCard({
 
           {(result.tokensIn || result.tokensOut) && (
             <Text fontSize={12} color="$textMuted">
-              Tokens: {result.tokensIn ?? "—"} in • {result.tokensOut ?? "—"} out
+              Tokens: {result.tokensIn ?? "—"} in • {result.tokensOut ?? "—"}{" "}
+              out
             </Text>
           )}
         </YStack>
@@ -423,7 +496,13 @@ function AggregatedCard({
       </XStack>
 
       {text ? (
-        <Text fontSize={15} fontWeight="500" color="$color" lineHeight={1.6} whiteSpace="pre-wrap">
+        <Text
+          fontSize={15}
+          fontWeight="500"
+          color="$color"
+          lineHeight={24}
+          whiteSpace="pre-wrap"
+        >
           {text}
         </Text>
       ) : (
@@ -447,7 +526,9 @@ function AggregatedCard({
         </Button>
         <Button
           size="$1"
-          backgroundColor={reaction === "up" ? "rgba(34, 197, 94, 0.14)" : "transparent"}
+          backgroundColor={
+            reaction === "up" ? "rgba(34, 197, 94, 0.14)" : "transparent"
+          }
           borderWidth={1}
           borderColor={reaction === "up" ? "$success" : "$border"}
           color={reaction === "up" ? "$success" : "$color"}
@@ -458,7 +539,9 @@ function AggregatedCard({
         </Button>
         <Button
           size="$1"
-          backgroundColor={reaction === "down" ? "rgba(239, 68, 68, 0.14)" : "transparent"}
+          backgroundColor={
+            reaction === "down" ? "rgba(239, 68, 68, 0.14)" : "transparent"
+          }
           borderWidth={1}
           borderColor={reaction === "down" ? "$red10" : "$border"}
           color={reaction === "down" ? "$red10" : "$color"}
@@ -499,7 +582,11 @@ function AggregatedCard({
           opacity={hasText && canReadAloud ? 1 : 0.45}
           aria-label={isReading ? "Stop reading aloud" : "Read aloud"}
         >
-          {isReading ? <VolumeX size={13} color="currentColor" /> : <Volume2 size={13} color="currentColor" />}
+          {isReading ? (
+            <VolumeX size={13} color="currentColor" />
+          ) : (
+            <Volume2 size={13} color="currentColor" />
+          )}
         </Button>
       </XStack>
     </YStack>
@@ -520,20 +607,28 @@ export default function RunPanel({
   onBranchModel,
   onBranchAggregated,
 }: RunPanelProps) {
-  const results = useMemo(() => run.selectedModels.map((id) => run.resultsByModel[id]).filter(Boolean), [run]);
+  const results = useMemo(
+    () =>
+      run.selectedModels.map((id) => run.resultsByModel[id]).filter(Boolean),
+    [run]
+  );
   const hasErrors = run.counts.failed > 0 || run.counts.cancelled > 0;
   const hasIndividuals = results.length > 0;
   const runModelIds = useMemo(() => {
     const baseIds =
-      Array.isArray(run.executionPlan.modelIds) && run.executionPlan.modelIds.length > 0
+      Array.isArray(run.executionPlan.modelIds) &&
+      run.executionPlan.modelIds.length > 0
         ? run.executionPlan.modelIds
         : run.selectedModels;
     return Array.from(new Set(baseIds.filter(Boolean)));
   }, [run.executionPlan.modelIds, run.selectedModels]);
-  const canReadAloud = typeof window !== "undefined" && "speechSynthesis" in window;
+  const canReadAloud =
+    typeof window !== "undefined" && "speechSynthesis" in window;
 
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
-  const [modelReactions, setModelReactions] = useState<Record<string, Reaction>>({});
+  const [modelReactions, setModelReactions] = useState<
+    Record<string, Reaction>
+  >({});
   const [aggregatedReaction, setAggregatedReaction] = useState<Reaction>(null);
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
 
@@ -574,8 +669,10 @@ export default function RunPanel({
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.onend = () => setReadingTarget((current) => (current === target ? null : current));
-    utterance.onerror = () => setReadingTarget((current) => (current === target ? null : current));
+    utterance.onend = () =>
+      setReadingTarget((current) => (current === target ? null : current));
+    utterance.onerror = () =>
+      setReadingTarget((current) => (current === target ? null : current));
     setReadingTarget(target);
     window.speechSynthesis.speak(utterance);
   };
@@ -603,8 +700,8 @@ export default function RunPanel({
               {run.status === "running"
                 ? "Multi-Model Analysis"
                 : hasErrors
-                ? "Analysis Complete (Partial)"
-                : "Analysis Complete"}
+                  ? "Analysis Complete (Partial)"
+                  : "Analysis Complete"}
             </Text>
 
             <XStack gap="$xs" flexWrap="wrap">
@@ -643,7 +740,13 @@ export default function RunPanel({
           >
             {run.showIndividual ? "Hide Individual" : "Show Individual"}
           </Button>
-          <Button size="$3" backgroundColor="$color" color="$background" borderRadius="$md" onPress={onCompare}>
+          <Button
+            size="$3"
+            backgroundColor="$color"
+            color="$background"
+            borderRadius="$md"
+            onPress={onCompare}
+          >
             Compare
           </Button>
         </XStack>
@@ -663,8 +766,12 @@ export default function RunPanel({
         onCopy={onCopyAggregated}
         onRetryAll={onRetryAll}
         onBranch={onBranchAggregated}
-        onThumbUp={() => setAggregatedReaction((current) => toggleReaction(current, "up"))}
-        onThumbDown={() => setAggregatedReaction((current) => toggleReaction(current, "down"))}
+        onThumbUp={() =>
+          setAggregatedReaction((current) => toggleReaction(current, "up"))
+        }
+        onThumbDown={() =>
+          setAggregatedReaction((current) => toggleReaction(current, "down"))
+        }
         onReadAloud={() => handleReadAloud("aggregated", run.aggregated?.text)}
         reaction={aggregatedReaction}
         isReading={readingTarget === "aggregated"}
@@ -701,16 +808,24 @@ export default function RunPanel({
                   onThumbUp={() =>
                     setModelReactions((prev) => ({
                       ...prev,
-                      [result.modelId]: toggleReaction(prev[result.modelId] ?? null, "up"),
+                      [result.modelId]: toggleReaction(
+                        prev[result.modelId] ?? null,
+                        "up"
+                      ),
                     }))
                   }
                   onThumbDown={() =>
                     setModelReactions((prev) => ({
                       ...prev,
-                      [result.modelId]: toggleReaction(prev[result.modelId] ?? null, "down"),
+                      [result.modelId]: toggleReaction(
+                        prev[result.modelId] ?? null,
+                        "down"
+                      ),
                     }))
                   }
-                  onReadAloud={() => handleReadAloud(result.modelId, result.text)}
+                  onReadAloud={() =>
+                    handleReadAloud(result.modelId, result.text)
+                  }
                   reaction={reaction}
                   isReading={readingTarget === result.modelId}
                   canReadAloud={canReadAloud}

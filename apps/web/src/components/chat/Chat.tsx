@@ -1,31 +1,25 @@
 "use client";
 
-import {
-  useState,
-  useCallback,
-  useRef,
-  useEffect,
-  useMemo,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Text, XStack, YStack } from "tamagui";
+import { fileToAttachment } from "@/lib/attachments";
+import { runAggregator, runModel } from "@/lib/providerAdapters";
+import CompareOverlay from "./CompareOverlay";
 import Composer from "./Composer";
 import Timeline from "./Timeline";
-import CompareOverlay from "./CompareOverlay";
 import type {
   ChatEntry,
-  MultiModelRun,
+  ChatMessage,
+  ComposerMode,
   ExecutionPlan,
   ModelResult,
-  ChatMessage,
+  MultiModelRun,
   SaveTranscriptPayload,
   SolveOutput,
-  TranscriptItem,
   SuggestionTask,
   TaskSuggestionModel,
-  ComposerMode,
+  TranscriptItem,
 } from "./types";
-import { runModel, runAggregator } from "@/lib/providerAdapters";
-import { fileToAttachment } from "@/lib/attachments";
 
 const DEFAULT_MULTI_MODELS = ["Nexus-Core", "Nexus-Math", "Nexus-Write"];
 const MAX_CONTEXT_MESSAGES = 12;
@@ -42,8 +36,10 @@ const TASK_SUGGESTION_SEEDS: Record<SuggestionTask, string[]> = {
 
 const TASK_SUGGESTION_KEYWORDS: Record<SuggestionTask, RegExp> = {
   code: /(code|coding|debug|program|developer|algorithm|software|function|bug|cs)/i,
-  creative: /(write|writing|creative|story|essay|tone|literature|draft|humanities)/i,
-  analysis: /(analysis|reason|research|math|physics|stats|quant|logic|evaluate|problem)/i,
+  creative:
+    /(write|writing|creative|story|essay|tone|literature|draft|humanities)/i,
+  analysis:
+    /(analysis|reason|research|math|physics|stats|quant|logic|evaluate|problem)/i,
   general: /(general|homework|q&a|mixed|core)/i,
 };
 
@@ -53,7 +49,9 @@ interface ChatContainerProps {
   preferredModels: string[];
   aggregatorModel: string;
   attachments: Array<{ name: string; type: string; data: string }>;
-  onAttachmentsChange: (attachments: Array<{ name: string; type: string; data: string }>) => void;
+  onAttachmentsChange: (
+    attachments: Array<{ name: string; type: string; data: string }>
+  ) => void;
   showSteps: boolean;
   showCitations: boolean;
   collapseAll: boolean;
@@ -104,7 +102,9 @@ export default function Chat({
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
   const [compareSelected, setCompareSelected] = useState<string[]>([]);
 
-  const runControllersRef = useRef<Map<string, Map<string, AbortController>>>(new Map());
+  const runControllersRef = useRef<Map<string, Map<string, AbortController>>>(
+    new Map()
+  );
   const runsRef = useRef<MultiModelRun[]>([]);
   const hasReconstructedRef = useRef(false);
   const hasInitializedSaveRef = useRef(false);
@@ -155,13 +155,21 @@ export default function Chat({
           return;
         }
 
-        const tools = toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[messageIndex];
-        const solveQuestions: SolveOutput[] = Array.isArray(tools?.solveQuestions)
+        const tools =
+          toolOverrides?.[msg.id] ?? toolOverridesByIndex?.[messageIndex];
+        const solveQuestions: SolveOutput[] = Array.isArray(
+          tools?.solveQuestions
+        )
           ? (tools.solveQuestions as SolveOutput[])
           : [];
-        const aggregateSolve = solveQuestions.find((s: SolveOutput) => s.kind === "aggregate");
-        const baseSolves = solveQuestions.filter((s: SolveOutput) => s.kind !== "aggregate");
-        const shouldRenderRun = baseSolves.length > 1 || Boolean(aggregateSolve);
+        const aggregateSolve = solveQuestions.find(
+          (s: SolveOutput) => s.kind === "aggregate"
+        );
+        const baseSolves = solveQuestions.filter(
+          (s: SolveOutput) => s.kind !== "aggregate"
+        );
+        const shouldRenderRun =
+          baseSolves.length > 1 || Boolean(aggregateSolve);
 
         if (!shouldRenderRun) {
           normalizedTimeline.push(entry);
@@ -309,10 +317,15 @@ export default function Chat({
         .map((model) => ({ id: model.id, name: model.name }));
 
       const merged = [
-        ...seeded.map((model: any) => ({ id: model.id, name: model.name ?? model.id })),
+        ...seeded.map((model: any) => ({
+          id: model.id,
+          name: model.name ?? model.id,
+        })),
         ...ranked,
       ];
-      return Array.from(new Map(merged.map((model) => [model.id, model])).values()).slice(0, 3);
+      return Array.from(
+        new Map(merged.map((model) => [model.id, model])).values()
+      ).slice(0, 3);
     };
 
     return {
@@ -323,26 +336,38 @@ export default function Chat({
     } satisfies Record<SuggestionTask, TaskSuggestionModel[]>;
   }, [modelMetaMap]);
 
-  const updateRun = useCallback((runId: string, updater: (run: MultiModelRun) => MultiModelRun) => {
-    setRuns((prev) => prev.map((r) => (r.id === runId ? updater(r) : r)));
-  }, []);
+  const updateRun = useCallback(
+    (runId: string, updater: (run: MultiModelRun) => MultiModelRun) => {
+      setRuns((prev) => prev.map((r) => (r.id === runId ? updater(r) : r)));
+    },
+    []
+  );
 
-  const getCounts = useCallback((results: Record<string, ModelResult>, total: number) => {
-    return Object.values(results).reduce(
-      (acc, item) => {
-        if (item.status === "complete") acc.complete += 1;
-        if (item.status === "error") acc.failed += 1;
-        if (item.status === "cancelled") acc.cancelled += 1;
-        return acc;
-      },
-      { total, complete: 0, failed: 0, cancelled: 0 }
-    );
-  }, []);
+  const getCounts = useCallback(
+    (results: Record<string, ModelResult>, total: number) => {
+      return Object.values(results).reduce(
+        (acc, item) => {
+          if (item.status === "complete") acc.complete += 1;
+          if (item.status === "error") acc.failed += 1;
+          if (item.status === "cancelled") acc.cancelled += 1;
+          return acc;
+        },
+        { total, complete: 0, failed: 0, cancelled: 0 }
+      );
+    },
+    []
+  );
 
-  const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
+  const runsById = useMemo(
+    () => new Map(runs.map((run) => [run.id, run])),
+    [runs]
+  );
 
   const buildContextMessages = useCallback(() => {
-    const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
+    const messages: Array<{
+      role: "user" | "assistant" | "system";
+      content: string;
+    }> = [];
     timeline.forEach((entry) => {
       if (entry.kind === "message") {
         const message = entry.message as ChatMessage;
@@ -363,7 +388,9 @@ export default function Chat({
       }
     });
 
-    const trimmed = messages.filter((message) => message.content.trim().length > 0);
+    const trimmed = messages.filter(
+      (message) => message.content.trim().length > 0
+    );
     const sliced = trimmed.slice(-MAX_CONTEXT_MESSAGES);
 
     let totalChars = 0;
@@ -385,6 +412,7 @@ export default function Chat({
       const contextMessages = buildContextMessages();
       const resolvedRunMode = mode === "none" ? undefined : mode;
       const executionMode: "fast" | "deep" = mode === "deep" ? "deep" : "fast";
+      const runAttachments = [...attachments];
 
       const plan: ExecutionPlan = {
         runId,
@@ -396,7 +424,7 @@ export default function Chat({
         temperature,
         maxTokens,
         contextMessages,
-        attachments: [...attachments],
+        attachments: runAttachments,
       };
 
       // Initialize results
@@ -418,7 +446,12 @@ export default function Chat({
         resultsByModel: initialResults,
         executionPlan: plan,
         timings: { startAt: Date.now() },
-        counts: { total: modelIds.length, complete: 0, failed: 0, cancelled: 0 },
+        counts: {
+          total: modelIds.length,
+          complete: 0,
+          failed: 0,
+          cancelled: 0,
+        },
         showIndividual: false,
         collapsed: true,
       };
@@ -429,6 +462,7 @@ export default function Chat({
         role: "user",
         content: question,
         optimistic: true,
+        attachments: runAttachments,
       };
 
       setRuns((prev) => [...prev, run]);
@@ -488,7 +522,9 @@ export default function Chat({
               ...prevRun.resultsByModel,
               [modelId]: {
                 modelId,
-                status: controller.signal.aborted ? ("cancelled" as const) : ("error" as const),
+                status: controller.signal.aborted
+                  ? ("cancelled" as const)
+                  : ("error" as const),
                 errorMessage: (error as Error)?.message ?? "Model failed",
               },
             };
@@ -504,13 +540,17 @@ export default function Chat({
         if (!currentRun) return;
 
         const successful = Object.values(currentRun.resultsByModel).filter(
-          (r): r is ModelResult & { text: string } => r.status === "complete" && !!r.text
+          (r): r is ModelResult & { text: string } =>
+            r.status === "complete" && !!r.text
         );
 
         if (successful.length > 0) {
           const aggregate = await runAggregator({
             question,
-            results: successful.map((r) => ({ modelId: r.modelId, text: r.text })),
+            results: successful.map((r) => ({
+              modelId: r.modelId,
+              text: r.text,
+            })),
             aggregatorModel: plan.aggregatorId,
             temperature: plan.temperature,
             maxTokens: plan.maxTokens,
@@ -619,7 +659,10 @@ export default function Chat({
 
   const handleToggleRunIndividual = useCallback(
     (runId: string) => {
-      updateRun(runId, (run) => ({ ...run, showIndividual: !run.showIndividual }));
+      updateRun(runId, (run) => ({
+        ...run,
+        showIndividual: !run.showIndividual,
+      }));
     },
     [updateRun]
   );
@@ -653,7 +696,11 @@ export default function Chat({
       if (!run) return;
 
       const targetModelIds = Array.from(
-        new Set(modelIdsToRetry.filter((modelId) => run.selectedModels.includes(modelId)))
+        new Set(
+          modelIdsToRetry.filter((modelId) =>
+            run.selectedModels.includes(modelId)
+          )
+        )
       );
       if (targetModelIds.length === 0) return;
 
@@ -732,7 +779,9 @@ export default function Chat({
               ...prevRun.resultsByModel,
               [modelId]: {
                 modelId,
-                status: controller.signal.aborted ? ("cancelled" as const) : ("error" as const),
+                status: controller.signal.aborted
+                  ? ("cancelled" as const)
+                  : ("error" as const),
                 errorMessage: (error as Error)?.message ?? "Model failed",
               },
             };
@@ -762,7 +811,10 @@ export default function Chat({
       if (successful.length > 0) {
         const aggregate = await runAggregator({
           question,
-          results: successful.map((result) => ({ modelId: result.modelId, text: result.text })),
+          results: successful.map((result) => ({
+            modelId: result.modelId,
+            text: result.text,
+          })),
           aggregatorModel: currentRun.executionPlan.aggregatorId,
           temperature: runTemperature,
           maxTokens: runMaxTokens,
@@ -842,7 +894,9 @@ export default function Chat({
     [branchWithText]
   );
 
-  const compareRun = compareRunId ? runs.find((r) => r.id === compareRunId) ?? null : null;
+  const compareRun = compareRunId
+    ? (runs.find((r) => r.id === compareRunId) ?? null)
+    : null;
 
   const transcript = useMemo<TranscriptItem[]>(() => {
     if (timeline.length === 0) return [];
@@ -872,7 +926,8 @@ export default function Chat({
         const baseSolves: SolveOutput[] = run.selectedModels
           .map((modelId) => {
             const result = run.resultsByModel[modelId];
-            if (!result || result.status !== "complete" || !result.text) return null;
+            if (!result || result.status !== "complete" || !result.text)
+              return null;
             return {
               steps: result.steps ?? [],
               final: result.text,
@@ -889,12 +944,11 @@ export default function Chat({
         const aggregateSolve: SolveOutput = {
           steps: [],
           final: run.aggregated.text,
-          model:
-            aggregatorId
-              ? modelNameMap.get(aggregatorId) ?? aggregatorId
-              : aggregatorModel !== "auto"
-                ? modelNameMap.get(aggregatorModel) ?? aggregatorModel
-                : undefined,
+          model: aggregatorId
+            ? (modelNameMap.get(aggregatorId) ?? aggregatorId)
+            : aggregatorModel !== "auto"
+              ? (modelNameMap.get(aggregatorModel) ?? aggregatorModel)
+              : undefined,
           confidence: run.aggregated.confidence,
           citations: [],
           durationMs:
@@ -924,7 +978,8 @@ export default function Chat({
       const entry = runEntries[i];
       if (entry.kind !== "run") continue;
       const run = runsById.get(entry.runId);
-      if (run?.selectedModels?.length) return Array.from(new Set(run.selectedModels));
+      if (run?.selectedModels?.length)
+        return Array.from(new Set(run.selectedModels));
     }
     return effectiveModels;
   }, [runEntries, runsById, effectiveModels]);
@@ -934,7 +989,8 @@ export default function Chat({
   const hasUserMessage = useMemo(
     () =>
       transcript.some(
-        (item) => "role" in item && item.role === "user" && (item.content ?? "").trim()
+        (item) =>
+          "role" in item && item.role === "user" && (item.content ?? "").trim()
       ),
     [transcript]
   );
@@ -950,8 +1006,20 @@ export default function Chat({
     }
     if (signature === lastSavedSignatureRef.current) return;
     lastSavedSignatureRef.current = signature;
-    onSaveTranscript({ transcript, models: historyModels, mode: persistedMode, hasRun: hasRunEntries });
-  }, [onSaveTranscript, transcript, historyModels, mode, hasRunEntries, hasUserMessage]);
+    onSaveTranscript({
+      transcript,
+      models: historyModels,
+      mode: persistedMode,
+      hasRun: hasRunEntries,
+    });
+  }, [
+    onSaveTranscript,
+    transcript,
+    historyModels,
+    mode,
+    hasRunEntries,
+    hasUserMessage,
+  ]);
 
   return (
     <YStack flex={1} gap="$lg">
@@ -1032,7 +1100,9 @@ export default function Chat({
         onTemperatureChange={setTemperature}
         onMaxTokensChange={setMaxTokens}
         placeholder={
-          readOnly ? "Viewing history. Click New Chat to ask a question." : undefined
+          readOnly
+            ? "Viewing history. Click New Chat to ask a question."
+            : undefined
         }
       />
 

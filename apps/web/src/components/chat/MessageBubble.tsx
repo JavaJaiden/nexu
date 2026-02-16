@@ -1,14 +1,110 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Text, XStack, YStack, Button } from "tamagui";
-import { ChevronDown, ChevronUp, Bot, Clock, Sparkles, Users } from "lucide-react";
-import type { MessageBubbleProps, ChatMessage, SolveOutput } from "./types";
+import {
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  FileText as FileTextIcon,
+  Sparkles,
+  Users,
+} from "lucide-react";
+import Image from "next/image";
+import { useEffect, useMemo, useState } from "react";
+import { Button, Text, XStack, YStack } from "tamagui";
+import type { ChatMessage, MessageBubbleProps, SolveOutput } from "./types";
 
 function formatLatency(ms?: number): string {
   if (ms === undefined || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function isImageAttachment(attachment: { name: string; type: string }) {
+  return (
+    attachment.type.startsWith("image/") ||
+    /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|webp)$/i.test(
+      attachment.name
+    )
+  );
+}
+
+function UserAttachmentPreview({
+  attachment,
+  onOpenImage,
+}: {
+  attachment: { name: string; type: string; data: string };
+  onOpenImage?: (src: string, name: string) => void;
+}) {
+  const isImage = isImageAttachment(attachment);
+  const previewSrc = isImage
+    ? `data:${attachment.type || "application/octet-stream"};base64,${attachment.data}`
+    : "";
+  const fileLabel = (attachment.type || "file").split("/")[1] ?? "file";
+
+  return (
+    <YStack
+      width={144}
+      gap="$xs"
+      padding="$xs"
+      backgroundColor="rgba(255,255,255,0.08)"
+      borderRadius="$md"
+      borderWidth={1}
+      borderColor="rgba(255,255,255,0.2)"
+    >
+      <YStack
+        height={92}
+        borderRadius="$sm"
+        borderWidth={1}
+        borderColor="rgba(255,255,255,0.2)"
+        overflow="hidden"
+        position="relative"
+        backgroundColor="rgba(0,0,0,0.16)"
+      >
+        {isImage ? (
+          <button
+            type="button"
+            onClick={() => onOpenImage?.(previewSrc, attachment.name)}
+            aria-label={`Open ${attachment.name} preview`}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "block",
+              border: "none",
+              padding: 0,
+              background: "transparent",
+              cursor: onOpenImage ? "zoom-in" : "default",
+            }}
+          >
+            <Image
+              src={previewSrc}
+              alt={attachment.name}
+              fill
+              unoptimized
+              sizes="144px"
+              loading="lazy"
+              style={{ objectFit: "cover" }}
+            />
+          </button>
+        ) : (
+          <YStack
+            alignItems="center"
+            justifyContent="center"
+            flex={1}
+            gap="$xs"
+          >
+            <FileTextIcon size={18} color="rgba(255,255,255,0.82)" />
+            <Text fontSize={10} color="rgba(255,255,255,0.82)" fontWeight="600">
+              {fileLabel.toUpperCase()}
+            </Text>
+          </YStack>
+        )}
+      </YStack>
+      <Text fontSize={11} color="$background" numberOfLines={1} maxWidth={134}>
+        {attachment.name}
+      </Text>
+    </YStack>
+  );
 }
 
 function SolveStep({ step, index }: { step: string; index: number }) {
@@ -17,7 +113,13 @@ function SolveStep({ step, index }: { step: string; index: number }) {
       <Text fontSize={12} color="$textMuted" fontWeight="600" minWidth={20}>
         {index + 1}.
       </Text>
-      <Text fontSize={13} color="$color" flex={1} lineHeight={1.5}>
+      <Text
+        fontSize={13}
+        color="$color"
+        flex={1}
+        lineHeight={20}
+        whiteSpace="pre-wrap"
+      >
         {step}
       </Text>
     </XStack>
@@ -64,7 +166,9 @@ function SolveCard({
             borderWidth={0}
             color="$textMuted"
             onPress={() => setExpanded(!expanded)}
-            icon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            icon={
+              expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+            }
           />
         )}
       </XStack>
@@ -74,7 +178,9 @@ function SolveCard({
           <Text fontSize={11} color="$textMuted">
             {solve.model ?? "Model"}
           </Text>
-          <Text fontSize={11} color="$textMuted">•</Text>
+          <Text fontSize={11} color="$textMuted">
+            •
+          </Text>
           <XStack alignItems="center" gap="$xs">
             <Clock size={11} color="var(--colorTextMuted)" />
             <Text fontSize={11} color="$textMuted">
@@ -93,7 +199,11 @@ function SolveCard({
       {expanded && showSteps && hasSteps && (
         <YStack gap="$xs" marginTop="$xs">
           {solve.steps.map((step, index) => (
-            <SolveStep key={index} step={step} index={index} />
+            <SolveStep
+              key={`${solve.model ?? "model"}-step-${step}`}
+              step={step}
+              index={index}
+            />
           ))}
         </YStack>
       )}
@@ -109,7 +219,13 @@ function SolveCard({
         <Text fontSize={12} color="$textMuted" marginBottom="$xs">
           Final Answer
         </Text>
-        <Text fontSize={15} fontWeight="600" color="$color" lineHeight={1.5}>
+        <Text
+          fontSize={15}
+          fontWeight="600"
+          color="$color"
+          lineHeight={22}
+          whiteSpace="pre-wrap"
+        >
           {solve.final}
         </Text>
       </YStack>
@@ -122,7 +238,6 @@ function FinalAnswerCard({
   attribution,
   details,
   confidence,
-  latencyMs,
   isAggregated,
   baseSolves,
   showSteps,
@@ -134,7 +249,6 @@ function FinalAnswerCard({
   attribution?: string | null;
   details?: string[];
   confidence?: number | null;
-  latencyMs?: number;
   isAggregated?: boolean;
   baseSolves?: SolveOutput[];
   showSteps: boolean;
@@ -150,7 +264,9 @@ function FinalAnswerCard({
     <YStack
       gap="$sm"
       padding="$lg"
-      backgroundColor={isAggregated ? "rgba(34, 197, 94, 0.08)" : "$backgroundSecondary"}
+      backgroundColor={
+        isAggregated ? "rgba(34, 197, 94, 0.08)" : "$backgroundSecondary"
+      }
       borderRadius="$lg"
       borderWidth={1}
       borderColor={isAggregated ? "$success" : "$border"}
@@ -158,7 +274,11 @@ function FinalAnswerCard({
       <XStack justifyContent="space-between" alignItems="flex-start">
         <XStack alignItems="center" gap="$xs">
           {isAggregated && <Sparkles size={16} color="#22C55E" />}
-          <Text fontSize={12} fontWeight="600" color={isAggregated ? "$success" : "$textMuted"}>
+          <Text
+            fontSize={12}
+            fontWeight="600"
+            color={isAggregated ? "$success" : "$textMuted"}
+          >
             {isAggregated ? "Aggregated Answer" : "Answer"}
           </Text>
         </XStack>
@@ -170,7 +290,9 @@ function FinalAnswerCard({
               borderWidth={0}
               color="$textMuted"
               onPress={onToggleIndividual}
-              icon={showIndividual ? <ChevronUp size={14} /> : <Users size={14} />}
+              icon={
+                showIndividual ? <ChevronUp size={14} /> : <Users size={14} />
+              }
             >
               {showIndividual ? "Hide Individual" : "Show Individual"}
             </Button>
@@ -182,7 +304,9 @@ function FinalAnswerCard({
               borderWidth={0}
               color="$textMuted"
               onPress={() => setExpanded(!expanded)}
-              icon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              icon={
+                expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+              }
             >
               {expanded ? "Less" : "More"}
             </Button>
@@ -194,7 +318,7 @@ function FinalAnswerCard({
         fontSize={16}
         fontWeight="500"
         color="$color"
-        lineHeight={1.6}
+        lineHeight={24}
         whiteSpace="pre-wrap"
       >
         {answer}
@@ -208,8 +332,8 @@ function FinalAnswerCard({
 
       {expanded && hasDetails && (
         <YStack gap="$xs" marginTop="$xs">
-          {details!.map((detail, index) => (
-            <Text key={index} fontSize={12} color="$textMuted">
+          {details?.map((detail) => (
+            <Text key={detail} fontSize={12} color="$textMuted">
               • {detail}
             </Text>
           ))}
@@ -229,9 +353,9 @@ function FinalAnswerCard({
             Individual Model Responses
           </Text>
           <YStack gap="$sm">
-            {baseSolves!.map((solve, index) => (
+            {baseSolves?.map((solve) => (
               <SolveCard
-                key={`${solve.model}-${index}`}
+                key={`${solve.model ?? "model"}-${solve.final}`}
                 solve={solve}
                 showSteps={showSteps}
                 showCitations={showCitations}
@@ -253,14 +377,40 @@ export default function MessageBubble({
   globalCollapsed,
 }: MessageBubbleProps) {
   const [showIndividualResponses, setShowIndividualResponses] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{
+    src: string;
+    name: string;
+  } | null>(null);
   const isExpanded = !globalCollapsed;
+  const userAttachments = isUser ? (message.attachments ?? []) : [];
+
+  useEffect(() => {
+    if (!lightboxImage) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLightboxImage(null);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [lightboxImage]);
 
   // Parse tool outputs from message
   const toolData = useMemo(() => {
     if (isUser) return null;
 
     const parts = (message as ChatMessage & { parts?: any[] }).parts ?? [];
-    const solveQuestions: SolveOutput[] = [...(toolOverride?.solveQuestions ?? [])];
+    const solveQuestions: SolveOutput[] = [
+      ...(toolOverride?.solveQuestions ?? []),
+    ];
     let subject = toolOverride?.detectSubject;
     const routeModels = [...(toolOverride?.routeModels ?? [])];
 
@@ -275,7 +425,7 @@ export default function MessageBubble({
           subject = output as typeof subject;
         }
         if (invocation.toolName === "routeModel") {
-          routeModels.push(output as typeof routeModels[0]);
+          routeModels.push(output as (typeof routeModels)[0]);
         }
         if (invocation.toolName === "solveQuestion") {
           if (Array.isArray(output)) {
@@ -294,8 +444,11 @@ export default function MessageBubble({
   }, [message, toolOverride, isUser]);
 
   // Assistant message
-  const aggregateSolve = toolData?.solveQuestions.find((s) => s.kind === "aggregate");
-  const baseSolves = toolData?.solveQuestions.filter((s) => s.kind !== "aggregate") ?? [];
+  const aggregateSolve = toolData?.solveQuestions.find(
+    (s) => s.kind === "aggregate"
+  );
+  const baseSolves =
+    toolData?.solveQuestions.filter((s) => s.kind !== "aggregate") ?? [];
   const finalSolve = aggregateSolve ?? baseSolves[baseSolves.length - 1];
   const isAggregated = Boolean(aggregateSolve);
 
@@ -350,20 +503,109 @@ export default function MessageBubble({
 
   // User message
   if (isUser) {
+    const hasUserText = (message.content ?? "").trim().length > 0;
+
     return (
-      <XStack justifyContent="flex-end" width="100%">
-        <YStack
-          maxWidth="85%"
-          padding="$md"
-          backgroundColor="$color"
-          borderRadius="$lg"
-          borderBottomRightRadius={4}
-        >
-          <Text fontSize={15} color="$background" lineHeight={1.5}>
-            {message.content}
-          </Text>
-        </YStack>
-      </XStack>
+      <>
+        <XStack justifyContent="flex-end" width="100%">
+          <YStack
+            maxWidth="85%"
+            padding="$md"
+            backgroundColor="$color"
+            borderRadius="$lg"
+            borderBottomRightRadius={4}
+          >
+            {userAttachments.length > 0 && (
+              <XStack
+                flexWrap="wrap"
+                gap="$xs"
+                marginBottom={hasUserText ? "$sm" : 0}
+              >
+                {userAttachments.map((attachment, index) => (
+                  <UserAttachmentPreview
+                    key={`${attachment.name}-${index}`}
+                    attachment={attachment}
+                    onOpenImage={setLightboxImage}
+                  />
+                ))}
+              </XStack>
+            )}
+            {hasUserText && (
+              <Text fontSize={15} color="$background" lineHeight={1.5}>
+                {message.content}
+              </Text>
+            )}
+          </YStack>
+        </XStack>
+
+        {lightboxImage && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Image preview for ${lightboxImage.name}`}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1000,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setLightboxImage(null)}
+              aria-label="Close image preview backdrop"
+              style={{
+                position: "absolute",
+                inset: 0,
+                border: "none",
+                backgroundColor: "rgba(0, 0, 0, 0.85)",
+                padding: 0,
+                cursor: "zoom-out",
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setLightboxImage(null)}
+              aria-label="Close image preview"
+              style={{
+                position: "fixed",
+                top: 20,
+                right: 20,
+                zIndex: 2,
+                border: "1px solid rgba(255,255,255,0.35)",
+                borderRadius: 8,
+                backgroundColor: "rgba(0,0,0,0.55)",
+                color: "white",
+                fontSize: 14,
+                padding: "6px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Close
+            </button>
+            <div
+              style={{
+                position: "fixed",
+                left: "50%",
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "min(92vw, 1200px)",
+                height: "min(86vh, 900px)",
+                zIndex: 1,
+              }}
+            >
+              <Image
+                src={lightboxImage.src}
+                alt={lightboxImage.name}
+                fill
+                unoptimized
+                sizes="92vw"
+                priority
+                style={{ objectFit: "contain" }}
+              />
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -388,12 +630,13 @@ export default function MessageBubble({
           attribution={attribution}
           details={details}
           confidence={finalSolve?.confidence}
-          latencyMs={finalSolve?.durationMs}
           isAggregated={isAggregated}
           baseSolves={baseSolves}
           showSteps={showSteps}
           showCitations={showCitations}
-          onToggleIndividual={() => setShowIndividualResponses(!showIndividualResponses)}
+          onToggleIndividual={() =>
+            setShowIndividualResponses(!showIndividualResponses)
+          }
           showIndividual={showIndividualResponses}
         />
 
@@ -404,9 +647,9 @@ export default function MessageBubble({
               Individual Model Responses
             </Text>
             <YStack gap="$sm">
-              {baseSolves.map((solve, index) => (
+              {baseSolves.map((solve) => (
                 <SolveCard
-                  key={`${solve.model}-${index}`}
+                  key={`${solve.model ?? "model"}-${solve.final}`}
                   solve={solve}
                   showSteps={showSteps}
                   showCitations={showCitations}

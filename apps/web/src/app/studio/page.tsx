@@ -1,26 +1,39 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
+import type { Message } from "ai";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  Plus,
+  Settings2,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { H1, Paragraph, Text, XStack, YStack, Button, Input } from "tamagui";
-import { Plus, ChevronLeft, ChevronRight, Settings2, ChevronDown, X, Layers, Sparkles } from "lucide-react";
-import { useThemeSetting } from "@/lib/themeContext";
-import { getProviderIcon } from "@/lib/modelCatalog";
-import Header from "@/components/Header";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Button, H1, Input, Paragraph, Text, XStack, YStack } from "tamagui";
+import AgentPicker from "@/components/AgentPicker";
+import AgentStackPicker from "@/components/AgentStackPicker";
+import type { ChatEntry } from "@/components/chat";
 import { Chat } from "@/components/chat";
 import type { SaveTranscriptPayload } from "@/components/chat/types";
-import AgentStackPicker from "@/components/AgentStackPicker";
-import AgentPicker from "@/components/AgentPicker";
+import Header from "@/components/Header";
 import {
-  loadHistory,
-  upsertHistoryEntry,
   type HistoryEntry,
+  loadHistory,
   type TranscriptMessage,
+  upsertHistoryEntry,
 } from "@/lib/historyStore";
-import { loadLabPresets, type LabPreset } from "@/lib/labStore";
-import { getModelHubCards, getModelNameMap, type ModelCard } from "@/lib/modelCatalog";
-import type { ChatEntry } from "@/components/chat";
-import type { Message } from "ai";
+import { type LabPreset, loadLabPresets } from "@/lib/labStore";
+import {
+  getModelHubCards,
+  getModelNameMap,
+  getProviderIcon,
+  type ModelCard,
+} from "@/lib/modelCatalog";
+import { useThemeSetting } from "@/lib/themeContext";
 
 type HistoryViewFilter = "single" | "multi" | "presets";
 const HISTORY_PAGE_SIZE = 3;
@@ -33,13 +46,15 @@ function StudioPageContent() {
   // Theme
   const { theme } = useThemeSetting();
   const isDark = theme === "dark";
-  
+
   // Theme colors
   const colors = useMemo(
     () => ({
       bg: "var(--app-bg, var(--background))",
-      bgSecondary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
-      bgTertiary: "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      bgSecondary:
+        "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
+      bgTertiary:
+        "var(--app-bg-secondary, var(--backgroundSecondary, var(--app-bg)))",
       border: "var(--app-border, var(--border))",
       text: "var(--app-text, var(--color))",
       textMuted: "var(--app-muted, var(--textMuted, var(--app-text)))",
@@ -48,18 +63,21 @@ function StudioPageContent() {
     }),
     []
   );
-  
+
   // Core state
   const [chatId, setChatId] = useState<string>(() => crypto.randomUUID());
   const [mode, setMode] = useState<"fast" | "deep" | "none">("none");
   const [showSteps, setShowSteps] = useState(true);
   const [showCitations, setShowCitations] = useState(true);
   const collapseAll = true;
-  const [attachments, setAttachments] = useState<Array<{ name: string; type: string; data: string }>>([]);
-  
+  const [attachments, setAttachments] = useState<
+    Array<{ name: string; type: string; data: string }>
+  >([]);
+
   // Sidebar list state
   const [showHistoryCount, setShowHistoryCount] = useState(HISTORY_PAGE_SIZE);
-  const [historyViewFilter, setHistoryViewFilter] = useState<HistoryViewFilter>("multi");
+  const [historyViewFilter, setHistoryViewFilter] =
+    useState<HistoryViewFilter>("multi");
 
   // Model selection
   const [preferredModels, setPreferredModels] = useState<string[]>([]);
@@ -69,12 +87,26 @@ function StudioPageContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [projectSearch, setProjectSearch] = useState("");
   const [projects, setProjects] = useState<HistoryEntry[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null
+  );
 
   // Data
   const modelCatalog = useMemo(() => getModelHubCards(), []);
+  const allowedModelIds = useMemo(
+    () => new Set(modelCatalog.map((model) => model.id)),
+    [modelCatalog]
+  );
+  const sanitizeModelIds = useCallback(
+    (ids: string[]) =>
+      Array.from(new Set(ids.filter((id) => allowedModelIds.has(id)))),
+    [allowedModelIds]
+  );
   const modelNameMap = useMemo(() => getModelNameMap(), []);
-  const modelMetaMap = useMemo(() => new Map(modelCatalog.map((m) => [m.id, m])), [modelCatalog]);
+  const modelMetaMap = useMemo(
+    () => new Map(modelCatalog.map((m) => [m.id, m])),
+    [modelCatalog]
+  );
   const [labPresets, setLabPresets] = useState<LabPreset[]>([]);
 
   const router = useRouter();
@@ -104,15 +136,34 @@ function StudioPageContent() {
     const stackParam = searchParams.get("stack");
     if (stackParam) {
       const stack = Array.from(
-        new Set(stackParam.split(",").map((s) => s.trim()).filter(Boolean))
+        new Set(
+          stackParam
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
       );
-      if (stack.length > 0) {
-        setPreferredModels(stack);
+      const validStack = sanitizeModelIds(stack);
+      if (validStack.length > 0) {
+        setPreferredModels(validStack);
         setSelectedProjectId(null);
         router.replace("/studio");
       }
     }
-  }, [searchParams, router]);
+  }, [searchParams, router, sanitizeModelIds]);
+
+  useEffect(() => {
+    setPreferredModels((prev) => {
+      const next = sanitizeModelIds(prev);
+      if (
+        next.length === prev.length &&
+        next.every((id, index) => id === prev[index])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [sanitizeModelIds]);
 
   // Get active project
   const activeProject = useMemo(
@@ -149,18 +200,17 @@ function StudioPageContent() {
   const toolOverrides = useMemo(() => {
     if (!activeProject) return undefined;
     let index = 0;
-    return activeProject.transcript.reduce<Record<string, TranscriptMessage["tools"]>>(
-      (acc, item) => {
-        if ("role" in item) {
-          const id = `${activeProject.id}-${index++}`;
-          if (item.role === "assistant" && item.tools) {
-            acc[id] = item.tools;
-          }
+    return activeProject.transcript.reduce<
+      Record<string, TranscriptMessage["tools"]>
+    >((acc, item) => {
+      if ("role" in item) {
+        const id = `${activeProject.id}-${index++}`;
+        if (item.role === "assistant" && item.tools) {
+          acc[id] = item.tools;
         }
-        return acc;
-      },
-      {}
-    );
+      }
+      return acc;
+    }, {});
   }, [activeProject]);
 
   const toolOverridesByIndex = useMemo(() => {
@@ -204,7 +254,10 @@ function StudioPageContent() {
         .filter((project) => isMultiModelProject(project))
         .map((project) => ({ kind: "project" as const, project }));
     }
-    return filteredPresets.map((preset) => ({ kind: "preset" as const, preset }));
+    return filteredPresets.map((preset) => ({
+      kind: "preset" as const,
+      preset,
+    }));
   }, [historyViewFilter, filteredProjects, filteredPresets]);
 
   useEffect(() => {
@@ -250,26 +303,36 @@ function StudioPageContent() {
     ({ transcript, models, mode, hasRun }: SaveTranscriptPayload) => {
       const firstUserMsg = transcript.find(
         (t): t is TranscriptMessage =>
-          "role" in t && t.role === "user" && (t.content ?? "").trim().length > 0
+          "role" in t &&
+          t.role === "user" &&
+          (t.content ?? "").trim().length > 0
       );
       if (!firstUserMsg) return;
 
       const question = (firstUserMsg.content ?? "").trim() || "New chat";
       const entries = loadHistory();
       const existing = entries.find((entry) => entry.id === chatId);
-      const existingTranscriptSignature = existing ? JSON.stringify(existing.transcript) : null;
+      const existingTranscriptSignature = existing
+        ? JSON.stringify(existing.transcript)
+        : null;
       const nextTranscriptSignature = JSON.stringify(transcript);
       const createdAt = existing?.createdAt ?? new Date().toISOString();
       const subject = existing?.subject ?? "General";
       const shouldOverrideModels = hasRun || !existing;
       const normalizedModels =
-        models.length && shouldOverrideModels ? models : existing?.models ?? models;
-      const dedupedModels = Array.from(new Set(normalizedModels.filter(Boolean)));
+        models.length && shouldOverrideModels
+          ? models
+          : (existing?.models ?? models);
+      const dedupedModels = Array.from(
+        new Set(normalizedModels.filter(Boolean))
+      );
       const model = dedupedModels[0] ?? existing?.model ?? "Nexus-Core";
       const finalModels = dedupedModels.length ? dedupedModels : [model];
       const hasSameModels = existing
         ? existing.models.length === finalModels.length &&
-          existing.models.every((modelId, index) => modelId === finalModels[index])
+          existing.models.every(
+            (modelId, index) => modelId === finalModels[index]
+          )
         : false;
 
       if (
@@ -295,7 +358,9 @@ function StudioPageContent() {
 
       const hasNewInformation =
         !existing || existingTranscriptSignature !== nextTranscriptSignature;
-      const nextEntries = upsertHistoryEntry(nextEntry, { moveToTop: hasNewInformation });
+      const nextEntries = upsertHistoryEntry(nextEntry, {
+        moveToTop: hasNewInformation,
+      });
       setProjects(nextEntries);
     },
     [chatId]
@@ -317,14 +382,21 @@ function StudioPageContent() {
     <YStack flex={1} backgroundColor={colors.bg} minHeight="100vh">
       <Header />
 
-      <YStack flex={1} padding="$lg" maxWidth={1600} width="100%" marginHorizontal="auto">
+      <YStack
+        flex={1}
+        padding="$lg"
+        maxWidth={1600}
+        width="100%"
+        marginHorizontal="auto"
+      >
         {/* Header */}
         <YStack marginBottom="$lg" gap="$xs">
           <H1 fontSize={28} fontWeight="700" color={colors.text}>
             Studio
           </H1>
           <Paragraph color={colors.textMuted} fontSize={15} maxWidth={600}>
-            Ask questions and compare responses from multiple AI models. Nexus aggregates the best answers.
+            Ask questions and compare responses from multiple AI models. Nexus
+            aggregates the best answers.
           </Paragraph>
         </YStack>
 
@@ -383,7 +455,9 @@ function StudioPageContent() {
                   <select
                     value={historyViewFilter}
                     onChange={(event) =>
-                      setHistoryViewFilter(event.currentTarget.value as HistoryViewFilter)
+                      setHistoryViewFilter(
+                        event.currentTarget.value as HistoryViewFilter
+                      )
                     }
                     style={{
                       width: "100%",
@@ -415,7 +489,9 @@ function StudioPageContent() {
 
               <YStack gap="$sm">
                 <Text fontSize={12} fontWeight="600" color={colors.textMuted}>
-                  {historyViewFilter === "presets" ? "Project presets" : "Chats"}
+                  {historyViewFilter === "presets"
+                    ? "Project presets"
+                    : "Chats"}
                 </Text>
 
                 {visibleHistoryItems.length === 0 ? (
@@ -431,56 +507,194 @@ function StudioPageContent() {
                     <YStack
                       borderRadius="$md"
                       padding="$xs"
-                      style={{ maxHeight: 360, overflowY: "auto", overflowX: "hidden" }}
+                      style={{
+                        maxHeight: 360,
+                        overflowY: "auto",
+                        overflowX: "hidden",
+                      }}
                     >
                       <YStack gap="$xs">
-                        {visibleHistoryItems.slice(0, showHistoryCount).map((item) => {
-                          if (item.kind === "preset") {
-                            const uniquePresetModels = Array.from(new Set(item.preset.models));
-                            const isPresetActive =
-                              uniquePresetModels.length > 0 &&
-                              uniquePresetModels.length === preferredModels.length &&
-                              uniquePresetModels.every((modelId) => preferredModels.includes(modelId));
+                        {visibleHistoryItems
+                          .slice(0, showHistoryCount)
+                          .map((item) => {
+                            if (item.kind === "preset") {
+                              const uniquePresetModels = Array.from(
+                                new Set(item.preset.models)
+                              );
+                              const isPresetActive =
+                                uniquePresetModels.length > 0 &&
+                                uniquePresetModels.length ===
+                                  preferredModels.length &&
+                                uniquePresetModels.every((modelId) =>
+                                  preferredModels.includes(modelId)
+                                );
+
+                              return (
+                                <Button
+                                  key={item.preset.id}
+                                  size="$3"
+                                  backgroundColor={
+                                    isPresetActive ? colors.bg : "transparent"
+                                  }
+                                  borderWidth={1}
+                                  borderColor={
+                                    isPresetActive
+                                      ? colors.accent
+                                      : colors.border
+                                  }
+                                  justifyContent="flex-start"
+                                  onPress={() => {
+                                    setPreferredModels(
+                                      sanitizeModelIds(uniquePresetModels)
+                                    );
+                                    setSelectedProjectId(null);
+                                    router.push("/studio");
+                                  }}
+                                >
+                                  <YStack
+                                    alignItems="flex-start"
+                                    gap="$xs"
+                                    width="100%"
+                                  >
+                                    <XStack alignItems="center" gap="$xs">
+                                      <Layers size={12} color={colors.accent} />
+                                      <Text
+                                        fontSize={13}
+                                        fontWeight="500"
+                                        color={colors.text}
+                                        numberOfLines={1}
+                                      >
+                                        {item.preset.name}
+                                      </Text>
+                                    </XStack>
+                                    <XStack
+                                      justifyContent="space-between"
+                                      width="100%"
+                                      alignItems="center"
+                                    >
+                                      <XStack gap="$sm">
+                                        <Text
+                                          fontSize={11}
+                                          color={colors.textMuted}
+                                        >
+                                          {item.preset.subject ??
+                                            "Project preset"}
+                                        </Text>
+                                        <Text
+                                          fontSize={11}
+                                          color={colors.textSecondary}
+                                        >
+                                          {formatDate(item.preset.createdAt)}
+                                        </Text>
+                                      </XStack>
+                                      <XStack alignItems="center" gap="$xs">
+                                        {uniquePresetModels
+                                          .slice(0, 3)
+                                          .map((modelId) => (
+                                            <Text
+                                              key={modelId}
+                                              fontSize={10}
+                                              color={colors.textSecondary}
+                                            >
+                                              {getProviderIcon(
+                                                modelMetaMap.get(modelId)
+                                                  ?.provider ?? ""
+                                              )}
+                                            </Text>
+                                          ))}
+                                        {uniquePresetModels.length > 3 && (
+                                          <Text
+                                            fontSize={10}
+                                            color={colors.textMuted}
+                                          >
+                                            +{uniquePresetModels.length - 3}
+                                          </Text>
+                                        )}
+                                      </XStack>
+                                    </XStack>
+                                  </YStack>
+                                </Button>
+                              );
+                            }
+
+                            const project = item.project;
+                            const isActive = project.id === selectedProjectId;
+                            const title = getProjectTitle(project);
+                            const uniqueModels = Array.from(
+                              new Set(project.models)
+                            );
 
                             return (
                               <Button
-                                key={item.preset.id}
+                                key={project.id}
                                 size="$3"
-                                backgroundColor={isPresetActive ? colors.bg : "transparent"}
+                                backgroundColor={
+                                  isActive ? colors.bg : "transparent"
+                                }
                                 borderWidth={1}
-                                borderColor={isPresetActive ? colors.accent : colors.border}
+                                borderColor={
+                                  isActive ? colors.accent : colors.border
+                                }
                                 justifyContent="flex-start"
-                                onPress={() => {
-                                  setPreferredModels(uniquePresetModels);
-                                  setSelectedProjectId(null);
-                                  router.push("/studio");
-                                }}
+                                onPress={() => handleSelectProject(project.id)}
                               >
-                                <YStack alignItems="flex-start" gap="$xs" width="100%">
-                                  <XStack alignItems="center" gap="$xs">
-                                    <Layers size={12} color={colors.accent} />
-                                    <Text fontSize={13} fontWeight="500" color={colors.text} numberOfLines={1}>
-                                      {item.preset.name}
-                                    </Text>
-                                  </XStack>
-                                  <XStack justifyContent="space-between" width="100%" alignItems="center">
+                                <YStack
+                                  alignItems="flex-start"
+                                  gap="$xs"
+                                  width="100%"
+                                >
+                                  <Text
+                                    fontSize={13}
+                                    fontWeight="500"
+                                    color={colors.text}
+                                    numberOfLines={1}
+                                  >
+                                    {title.length > 40
+                                      ? `${title.slice(0, 40)}...`
+                                      : title}
+                                  </Text>
+                                  <XStack
+                                    justifyContent="space-between"
+                                    width="100%"
+                                    alignItems="center"
+                                  >
                                     <XStack gap="$sm">
-                                      <Text fontSize={11} color={colors.textMuted}>
-                                        {item.preset.subject ?? "Project preset"}
+                                      <Text
+                                        fontSize={11}
+                                        color={colors.textMuted}
+                                      >
+                                        {isMultiModelProject(project)
+                                          ? "Multi-Model"
+                                          : "Single Model"}
                                       </Text>
-                                      <Text fontSize={11} color={colors.textSecondary}>
-                                        {formatDate(item.preset.createdAt)}
+                                      <Text
+                                        fontSize={11}
+                                        color={colors.textSecondary}
+                                      >
+                                        {formatDate(project.createdAt)}
                                       </Text>
                                     </XStack>
                                     <XStack alignItems="center" gap="$xs">
-                                      {uniquePresetModels.slice(0, 3).map((modelId) => (
-                                        <Text key={modelId} fontSize={10} color={colors.textSecondary}>
-                                          {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
-                                        </Text>
-                                      ))}
-                                      {uniquePresetModels.length > 3 && (
-                                        <Text fontSize={10} color={colors.textMuted}>
-                                          +{uniquePresetModels.length - 3}
+                                      {uniqueModels
+                                        .slice(0, 3)
+                                        .map((modelId) => (
+                                          <Text
+                                            key={modelId}
+                                            fontSize={10}
+                                            color={colors.textSecondary}
+                                          >
+                                            {getProviderIcon(
+                                              modelMetaMap.get(modelId)
+                                                ?.provider ?? ""
+                                            )}
+                                          </Text>
+                                        ))}
+                                      {uniqueModels.length > 3 && (
+                                        <Text
+                                          fontSize={10}
+                                          color={colors.textMuted}
+                                        >
+                                          +{uniqueModels.length - 3}
                                         </Text>
                                       )}
                                     </XStack>
@@ -488,58 +702,7 @@ function StudioPageContent() {
                                 </YStack>
                               </Button>
                             );
-                          }
-
-                          const project = item.project;
-                          const isActive = project.id === selectedProjectId;
-                          const title = getProjectTitle(project);
-                          const uniqueModels = Array.from(new Set(project.models));
-
-                          return (
-                            <Button
-                              key={project.id}
-                              size="$3"
-                              backgroundColor={isActive ? colors.bg : "transparent"}
-                              borderWidth={1}
-                              borderColor={isActive ? colors.accent : colors.border}
-                              justifyContent="flex-start"
-                              onPress={() => handleSelectProject(project.id)}
-                            >
-                              <YStack alignItems="flex-start" gap="$xs" width="100%">
-                                <Text
-                                  fontSize={13}
-                                  fontWeight="500"
-                                  color={colors.text}
-                                  numberOfLines={1}
-                                >
-                                  {title.length > 40 ? `${title.slice(0, 40)}...` : title}
-                                </Text>
-                                <XStack justifyContent="space-between" width="100%" alignItems="center">
-                                  <XStack gap="$sm">
-                                    <Text fontSize={11} color={colors.textMuted}>
-                                      {isMultiModelProject(project) ? "Multi-Model" : "Single Model"}
-                                    </Text>
-                                    <Text fontSize={11} color={colors.textSecondary}>
-                                      {formatDate(project.createdAt)}
-                                    </Text>
-                                  </XStack>
-                                  <XStack alignItems="center" gap="$xs">
-                                    {uniqueModels.slice(0, 3).map((modelId) => (
-                                      <Text key={modelId} fontSize={10} color={colors.textSecondary}>
-                                        {getProviderIcon(modelMetaMap.get(modelId)?.provider ?? "")}
-                                      </Text>
-                                    ))}
-                                    {uniqueModels.length > 3 && (
-                                      <Text fontSize={10} color={colors.textMuted}>
-                                        +{uniqueModels.length - 3}
-                                      </Text>
-                                    )}
-                                  </XStack>
-                                </XStack>
-                              </YStack>
-                            </Button>
-                          );
-                        })}
+                          })}
                       </YStack>
                     </YStack>
 
@@ -549,7 +712,11 @@ function StudioPageContent() {
                         backgroundColor="transparent"
                         borderWidth={0}
                         color={colors.accent}
-                        onPress={() => setShowHistoryCount((count) => count + HISTORY_PAGE_SIZE)}
+                        onPress={() =>
+                          setShowHistoryCount(
+                            (count) => count + HISTORY_PAGE_SIZE
+                          )
+                        }
                         icon={<ChevronDown size={14} />}
                       >
                         {`Show ${Math.min(HISTORY_PAGE_SIZE, visibleHistoryItems.length - showHistoryCount)} more`}
@@ -608,7 +775,7 @@ function StudioPageContent() {
                     presets={labPresets}
                     defaultCount={3}
                   />
-                  
+
                   {/* Selected Model Cards */}
                   {selectedModelDetails.length > 0 && (
                     <XStack flexWrap="wrap" gap="$xs" marginTop="$xs">
@@ -642,7 +809,7 @@ function StudioPageContent() {
                       ))}
                     </XStack>
                   )}
-                  
+
                   <Text fontSize={12} color={colors.textMuted}>
                     {preferredModels.length >= 2
                       ? `${preferredModels.length} models selected`
@@ -659,7 +826,7 @@ function StudioPageContent() {
                     onChange={setAggregatorModel}
                     models={modelCatalog}
                   />
-                  
+
                   {/* Aggregator Model Card */}
                   {aggregatorModelDetails && (
                     <XStack
@@ -667,7 +834,11 @@ function StudioPageContent() {
                       gap="$xs"
                       paddingHorizontal="$sm"
                       paddingVertical="$xs"
-                      backgroundColor={isDark ? "rgba(34, 197, 94, 0.15)" : "rgba(34, 197, 94, 0.1)"}
+                      backgroundColor={
+                        isDark
+                          ? "rgba(34, 197, 94, 0.15)"
+                          : "rgba(34, 197, 94, 0.1)"
+                      }
                       borderWidth={1}
                       borderColor={colors.accent}
                       borderRadius="$md"
@@ -688,12 +859,13 @@ function StudioPageContent() {
                       />
                     </XStack>
                   )}
-                  
+
                   <Text fontSize={12} color={colors.textMuted}>
-                    {aggregatorModel === "auto" ? "Auto-selects best model" : "Custom aggregator"}
+                    {aggregatorModel === "auto"
+                      ? "Auto-selects best model"
+                      : "Custom aggregator"}
                   </Text>
                 </YStack>
-
               </XStack>
             </YStack>
 
@@ -721,7 +893,9 @@ function StudioPageContent() {
                 onToggleCitations={() => setShowCitations((prev) => !prev)}
                 onSetAggregatorModel={setAggregatorModel}
                 onAddModelsToStack={(modelIds) =>
-                  setPreferredModels((prev) => Array.from(new Set([...prev, ...modelIds])))
+                  setPreferredModels((prev) =>
+                    sanitizeModelIds([...prev, ...modelIds])
+                  )
                 }
                 collapseAll={collapseAll}
                 modelMetaMap={modelMetaMap}
@@ -742,7 +916,11 @@ function StudioPageContent() {
 
 export default function StudioPage() {
   return (
-    <Suspense fallback={<div style={{ padding: 40, textAlign: "center" }}>Loading...</div>}>
+    <Suspense
+      fallback={
+        <div style={{ padding: 40, textAlign: "center" }}>Loading...</div>
+      }
+    >
       <StudioPageContent />
     </Suspense>
   );

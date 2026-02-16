@@ -24,10 +24,12 @@ export type ModelCard = {
 export type ProviderGroup = {
   label: string;
   status: string;
-  models: Array<{
-    id: string;
-    name: string;
-  } & ModelCapability>;
+  models: Array<
+    {
+      id: string;
+      name: string;
+    } & ModelCapability
+  >;
 };
 
 export const routerModels: ModelCard[] = [

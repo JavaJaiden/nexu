@@ -1,15 +1,21 @@
 import type { Message } from "ai";
-import type { ModelCard } from "@/lib/modelCatalog";
+import type { PdfAttachment } from "@/lib/externalContext";
 import type {
+  ModelSelectionSnapshot,
+  RouteOutput,
+  SolveOutput,
+  SubjectOutput,
+  TranscriptItem,
+} from "@/lib/historyStore";
+import type { ModelCard } from "@/lib/modelCatalog";
+
+export type {
   SubjectOutput,
   RouteOutput,
   SolveOutput,
   ModelSelectionSnapshot,
   TranscriptItem,
-} from "@/lib/historyStore";
-import type { PdfAttachment } from "@/lib/externalContext";
-
-export type { SubjectOutput, RouteOutput, SolveOutput, ModelSelectionSnapshot, TranscriptItem };
+};
 export type { PdfAttachment };
 export type { ModelCard };
 
@@ -35,6 +41,12 @@ export type AggregatedResult = {
   confidence?: number;
 };
 
+export type ChatAttachment = {
+  name: string;
+  type: string;
+  data: string;
+};
+
 export type ComposerMode = "fast" | "deep" | "none";
 
 export type ExecutionPlan = {
@@ -47,8 +59,11 @@ export type ExecutionPlan = {
   mode: "fast" | "deep";
   temperature?: number;
   maxTokens?: number;
-  contextMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-  attachments: Array<{ name: string; type: string; data: string }>;
+  contextMessages?: Array<{
+    role: "user" | "assistant" | "system";
+    content: string;
+  }>;
+  attachments: ChatAttachment[];
 };
 
 export type MultiModelRun = {
@@ -62,7 +77,12 @@ export type MultiModelRun = {
   executionPlan: ExecutionPlan;
   snapshotId?: string;
   timings: { startAt: number; endAt?: number };
-  counts: { total: number; complete: number; failed: number; cancelled: number };
+  counts: {
+    total: number;
+    complete: number;
+    failed: number;
+    cancelled: number;
+  };
   showIndividual: boolean;
   collapsed: boolean;
 };
@@ -84,6 +104,7 @@ export type ChatMessage = Message & {
   clientMessageId?: string;
   runId?: string;
   createdAt?: string;
+  attachments?: ChatAttachment[];
 };
 
 export type SaveTranscriptPayload = {
