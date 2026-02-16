@@ -10,7 +10,13 @@ import {
   Users,
 } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { Button, Text, XStack, YStack } from "tamagui";
 import type { ChatMessage, MessageBubbleProps, SolveOutput } from "./types";
 
@@ -29,12 +35,14 @@ function isImageAttachment(attachment: { name: string; type: string }) {
   );
 }
 
+type LightboxImage = { src: string; name: string };
+
 function UserAttachmentPreview({
   attachment,
   onOpenImage,
 }: {
   attachment: { name: string; type: string; data: string };
-  onOpenImage?: (src: string, name: string) => void;
+  onOpenImage?: Dispatch<SetStateAction<LightboxImage | null>>;
 }) {
   const isImage = isImageAttachment(attachment);
   const previewSrc = isImage
@@ -64,7 +72,9 @@ function UserAttachmentPreview({
         {isImage ? (
           <button
             type="button"
-            onClick={() => onOpenImage?.(previewSrc, attachment.name)}
+            onClick={() =>
+              onOpenImage?.({ src: previewSrc, name: attachment.name })
+            }
             aria-label={`Open ${attachment.name} preview`}
             style={{
               width: "100%",
@@ -377,10 +387,9 @@ export default function MessageBubble({
   globalCollapsed,
 }: MessageBubbleProps) {
   const [showIndividualResponses, setShowIndividualResponses] = useState(false);
-  const [lightboxImage, setLightboxImage] = useState<{
-    src: string;
-    name: string;
-  } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(
+    null
+  );
   const isExpanded = !globalCollapsed;
   const userAttachments = isUser ? (message.attachments ?? []) : [];
 
