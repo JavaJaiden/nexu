@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { isBlockedModelId } from "@/lib/modelAvailability";
 
 const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
   {
@@ -86,12 +87,14 @@ export async function POST(req: Request) {
       models
         .filter((model): model is string => typeof model === "string")
         .map((model) => model.trim())
-        .filter(Boolean)
+        .filter((model) => Boolean(model) && !isBlockedModelId(model))
     )
   );
 
   if (uniqueModels.length === 0) {
-    return new Response("Missing question or models", { status: 400 });
+    return new Response("No eligible models available for this run", {
+      status: 400,
+    });
   }
 
   const subject = detectSubject(question);

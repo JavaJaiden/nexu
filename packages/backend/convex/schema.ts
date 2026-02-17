@@ -28,7 +28,7 @@ export default defineSchema({
     ),
     updatedAt: v.number(),
   })
-    .index("by_id", ["id"])
+    .index("by_public_id", ["id"])
     .index("by_modelId", ["modelId"])
     .index("by_provider", ["provider"])
     .index("by_name", ["name"]),

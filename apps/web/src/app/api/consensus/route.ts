@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { isBlockedModelId } from "@/lib/modelAvailability";
 
 function formatLatency(ms: number) {
   if (!Number.isFinite(ms)) return "unknown";
@@ -34,8 +35,12 @@ export async function POST(req: Request) {
     return new Response("Missing question or answers", { status: 400 });
   }
 
-  const aggregatorLabel =
+  const aggregatorLabelRaw =
     typeof aggregatorModel === "string" ? aggregatorModel : null;
+  const aggregatorLabel =
+    aggregatorLabelRaw && !isBlockedModelId(aggregatorLabelRaw)
+      ? aggregatorLabelRaw
+      : null;
   const fallbackLabel = "Nexus-Core";
   const fallbackModelId = "openai/gpt-4o-mini";
   const normalizedTemperature =

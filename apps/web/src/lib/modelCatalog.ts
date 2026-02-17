@@ -1,3 +1,4 @@
+import { isBlockedModelId } from "@/lib/modelAvailability";
 import { gatewayModelIds } from "@/lib/modelGatewayRegistry";
 
 export type ModelCapability = {
@@ -167,6 +168,7 @@ function buildExternalProviders(modelIds: readonly string[]): ProviderGroup[] {
   modelIds.forEach((id) => {
     if (seenIds.has(id)) return;
     seenIds.add(id);
+    if (isBlockedModelId(id)) return;
     const [providerKey, modelKey] = id.split("/");
     if (!providerKey || !modelKey) return;
     const label = providerLabels[providerKey] ?? providerKey;

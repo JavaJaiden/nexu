@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import { isBlockedModelId } from "@/lib/modelAvailability";
 import { gatewayModelIds } from "@/lib/modelGatewayRegistry";
 import { orOpenAI } from "@/lib/orProvider";
 
@@ -43,15 +44,17 @@ const baseOpenAIModels: GatewayModelSpec[] = [
   },
 ];
 
-const registryModels: GatewayModelSpec[] = gatewayModelIds.map((id) => {
-  const [provider] = id.split("/");
-  return {
-    label: id,
-    provider,
-    modelId: id,
-    available: true,
-  };
-});
+const registryModels: GatewayModelSpec[] = gatewayModelIds
+  .filter((id) => !isBlockedModelId(id))
+  .map((id) => {
+    const [provider] = id.split("/");
+    return {
+      label: id,
+      provider,
+      modelId: id,
+      available: true,
+    };
+  });
 
 const gatewayModels: GatewayModelSpec[] = (() => {
   const map = new Map<string, GatewayModelSpec>();
@@ -135,6 +138,14 @@ export function resolveGatewayModel(
 
   const normalizedPreferred = preferredLabel.trim();
   if (normalizedPreferred.includes("/")) {
+    if (isBlockedModelId(normalizedPreferred)) {
+      return {
+        model: orOpenAI(fallbackModelId),
+        resolvedLabel: fallbackLabel,
+        requestedLabel: normalizedPreferred,
+        fallbackNote: `Requested model ${normalizedPreferred} is blocked due to reliability issues. Routed to ${fallbackLabel}.`,
+      };
+    }
     return {
       model: orOpenAI(normalizedPreferred),
       resolvedLabel: normalizedPreferred,

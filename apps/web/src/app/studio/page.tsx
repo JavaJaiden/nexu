@@ -41,6 +41,7 @@ import {
   loadLabPresets,
   recordLabExperiment,
   summarizeLabCombinations,
+  upsertLabPreset,
 } from "@/lib/labStore";
 import {
   buildModelHubCardsFromIds,
@@ -61,6 +62,12 @@ function normalizeSubject(subject?: string) {
   return value.length > 0 ? value : "General";
 }
 
+function modelStackKey(modelIds: string[]) {
+  return Array.from(new Set(modelIds.filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+}
+
 function detectSubjectFromTranscript(transcript: TranscriptItem[]) {
   for (const item of transcript) {
     if (!("role" in item) || item.role !== "assistant") continue;
@@ -75,6 +82,7 @@ function detectSubjectFromTranscript(transcript: TranscriptItem[]) {
 function inferBestModelOutcome(transcript: TranscriptItem[], selectedModelIds: string[]) {
   let bestModel: string | undefined;
   let bestScore: number | undefined;
+  let bestScoreForComparison = -1;
 
   for (const item of transcript) {
     if (!("role" in item) || item.role !== "assistant") continue;
@@ -86,9 +94,11 @@ function inferBestModelOutcome(transcript: TranscriptItem[], selectedModelIds: s
         typeof solve.confidence === "number" && Number.isFinite(solve.confidence)
           ? Math.max(0, Math.min(1, solve.confidence))
           : undefined;
-      if (bestScore === undefined || (confidence ?? 0) > bestScore) {
+      const confidenceForComparison = confidence ?? 0;
+      if (!bestModel || confidenceForComparison > bestScoreForComparison) {
         bestModel = modelId;
-        bestScore = confidence ?? bestScore;
+        bestScore = confidence;
+        bestScoreForComparison = confidenceForComparison;
       }
     }
   }
@@ -578,6 +588,45 @@ function StudioPageContent() {
           score,
         });
         setLabExperiments(nextExperiments);
+
+        const bestCombinations = summarizeLabCombinations(nextExperiments, subject, 4);
+        const existingPresets = loadLabPresets();
+        const existingBestStackPresets = new Map(
+          existingPresets.map((preset) => {
+            const key = `${normalizeSubject(preset.subject).toLowerCase()}::${modelStackKey(preset.models)}`;
+            return [key, preset] as const;
+          })
+        );
+
+        let nextPresets = existingPresets;
+        for (const combination of bestCombinations) {
+          if (combination.models.length < 2) continue;
+          const comboKey = `${normalizeSubject(combination.subject).toLowerCase()}::${modelStackKey(combination.models)}`;
+          const existing = existingBestStackPresets.get(comboKey);
+          const presetName =
+            existing?.name ??
+            `${normalizeSubject(combination.subject)} Best Stack`;
+
+          const nextPreset: LabPreset = {
+            id:
+              existing?.id ??
+              (typeof crypto !== "undefined"
+                ? crypto.randomUUID()
+                : `best-stack-${Date.now()}-${modelStackKey(combination.models)}`),
+            name: presetName,
+            models: combination.models,
+            subject: combination.subject,
+            tags: Array.from(
+              new Set([...(existing?.tags ?? []), "best-stack", "auto-saved"])
+            ),
+            createdAt: existing?.createdAt ?? new Date().toISOString(),
+          };
+
+          nextPresets = upsertLabPreset(nextPreset);
+          existingBestStackPresets.set(comboKey, nextPreset);
+        }
+
+        setLabPresets(nextPresets);
       }
     },
     [chatId, persistHistoryEntryToServer]

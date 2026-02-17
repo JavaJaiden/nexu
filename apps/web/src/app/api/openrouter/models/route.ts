@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { filterBlockedModelIds } from "@/lib/modelAvailability";
 
 const OPENROUTER_BASE_URL =
   process.env.OR_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -16,9 +17,7 @@ function normalizeBaseUrl(value: string) {
 
 function isModelId(value: unknown): value is string {
   return (
-    typeof value === "string" &&
-    value.includes("/") &&
-    value.trim().length > 0
+    typeof value === "string" && value.includes("/") && value.trim().length > 0
   );
 }
 
@@ -72,10 +71,7 @@ export async function GET() {
     );
 
     if (!response.ok) {
-      return NextResponse.json(
-        { modelIds: [], stale: true },
-        { status: 200 }
-      );
+      return NextResponse.json({ modelIds: [], stale: true }, { status: 200 });
     }
 
     const payload = (await response.json()) as {
@@ -84,27 +80,23 @@ export async function GET() {
     const records = Array.isArray(payload.data) ? payload.data : [];
     const modelIds = Array.from(
       new Set(
-        records
-          .filter((record) => supportsTextOutput(record))
-          .map((record) => record.id)
-          .filter(isModelId)
-          .map((id) => id.trim())
-          .sort((a, b) => a.localeCompare(b))
+        filterBlockedModelIds(
+          records
+            .filter((record) => supportsTextOutput(record))
+            .map((record) => record.id)
+            .filter(isModelId)
+            .map((id) => id.trim())
+            .sort((a, b) => a.localeCompare(b))
+        )
       )
     );
 
     if (modelIds.length === 0) {
-      return NextResponse.json(
-        { modelIds: [], stale: true },
-        { status: 200 }
-      );
+      return NextResponse.json({ modelIds: [], stale: true }, { status: 200 });
     }
 
     return NextResponse.json({ modelIds, stale: false }, { status: 200 });
   } catch {
-    return NextResponse.json(
-      { modelIds: [], stale: true },
-      { status: 200 }
-    );
+    return NextResponse.json({ modelIds: [], stale: true }, { status: 200 });
   }
 }

@@ -2,6 +2,7 @@ import { convertToCoreMessages, generateObject, streamText, tool } from "ai";
 import { z } from "zod";
 import { resolveGatewayModel, resolveRouterModel } from "@/lib/aiGateway";
 import { buildExternalContext } from "@/lib/externalContext";
+import { isBlockedModelId } from "@/lib/modelAvailability";
 import { orOpenAI } from "@/lib/orProvider";
 
 const subjectKeywords: Array<{ subject: string; keywords: RegExp }> = [
@@ -112,13 +113,21 @@ export async function POST(req: Request) {
 
   const selectedMode = mode ?? "fast";
   const inputMessages = messages ?? [];
-  const preferredLabel =
+  const preferredLabelRaw =
     typeof preferredModel === "string" ? preferredModel : null;
+  const preferredLabel =
+    preferredLabelRaw && !isBlockedModelId(preferredLabelRaw)
+      ? preferredLabelRaw
+      : null;
   const preferredStack = Array.isArray(preferredModels)
     ? preferredModels.filter((entry) => typeof entry === "string")
     : [];
   const normalizedStack = Array.from(
-    new Set(preferredStack.filter((entry) => entry && entry !== "auto"))
+    new Set(
+      preferredStack.filter(
+        (entry) => entry && entry !== "auto" && !isBlockedModelId(entry)
+      )
+    )
   );
   const aggregatorLabel =
     typeof aggregatorModel === "string" ? aggregatorModel : null;
